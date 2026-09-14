@@ -10,7 +10,7 @@ use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_component::notification::Notification;
 use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
 use gpui_component::tab::{Tab, TabBar};
-use gpui_component::{ActiveTheme, IconName, Root, Size, Sizable, StyledExt, Theme, TitleBar, WindowExt, h_flex, v_flex};
+use gpui_component::{ActiveTheme, Disableable, IconName, Root, Size, Sizable, StyledExt, Theme, TitleBar, WindowExt, h_flex, v_flex};
 
 use crate::kafka::KafkaService;
 use crate::kafka::metadata::{ClusterInfo, TopicInfo};
@@ -45,7 +45,11 @@ actions!(
         PreviousConnection,
         EditActiveConnection,
         ConsumeSelected,
-        StopConsume
+        StopConsume,
+        NewTab,
+        DuplicateTab,
+        CloseTab,
+        CloseAllTabs
     ]
 );
 
@@ -82,6 +86,34 @@ struct ConnectionView {
     tab: MainTab,
 }
 
+/// The largest number of tabs the window keeps.
+pub const MAX_TABS: usize = 13;
+
+/// One tab. It owns its own views, so a switch between tabs reloads nothing.
+struct Session {
+    id: u64,
+    connection: Option<String>,
+    topic: Option<Arc<TopicInfo>>,
+    tab: MainTab,
+    messages: Entity<MessagesView>,
+    produce: Entity<ProduceView>,
+    consumers: Entity<ConsumersView>,
+}
+
+impl Session {
+    fn new(id: u64, window: &mut Window, cx: &mut Context<KafkamitterApp>) -> Self {
+        Self {
+            id,
+            connection: None,
+            topic: None,
+            tab: MainTab::Messages,
+            messages: cx.new(|cx| MessagesView::new(window, cx)),
+            produce: cx.new(|cx| ProduceView::new(window, cx)),
+            consumers: cx.new(|cx| ConsumersView::new(window, cx)),
+        }
+    }
+}
+
 pub enum ConnState {
     Connecting,
     Connected(Rc<ClusterInfo>),
@@ -94,16 +126,13 @@ pub struct KafkamitterApp {
     states: HashMap<String, ConnState>,
     views: HashMap<String, ConnectionView>,
     dev_passwords: HashMap<String, String>,
-    active: Option<String>,
-    selected_topic: Option<Arc<TopicInfo>>,
+    sessions: Vec<Session>,
+    current: usize,
+    next_session_id: u64,
     topics: Entity<ListState<TopicListDelegate>>,
-    messages: Entity<MessagesView>,
-    produce: Entity<ProduceView>,
-    consumers: Entity<ConsumersView>,
     split: Entity<ResizableState>,
     settings: Settings,
     focus_handle: FocusHandle,
-    tab: MainTab,
     reselect_after_refresh: Option<String>,
     dev_switch_back: Option<String>,
     first_render_traced: bool,
@@ -113,9 +142,7 @@ pub struct KafkamitterApp {
 impl KafkamitterApp {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let topics = cx.new(|cx| ListState::new(TopicListDelegate::new(), window, cx).searchable(true));
-        let messages = cx.new(|cx| MessagesView::new(window, cx));
-        let produce = cx.new(|cx| ProduceView::new(window, cx));
-        let consumers = cx.new(|cx| ConsumersView::new(window, cx));
+        let first_session = Session::new(0, window, cx);
         let split = cx.new(|_| ResizableState::default());
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
@@ -137,21 +164,163 @@ impl KafkamitterApp {
             states: HashMap::new(),
             views: HashMap::new(),
             dev_passwords: HashMap::new(),
-            active: None,
-            selected_topic: None,
+            sessions: vec![first_session],
+            current: 0,
+            next_session_id: 1,
             topics,
-            messages,
-            produce,
-            consumers,
             split,
             settings: Settings::default(),
             focus_handle,
-            tab: MainTab::Messages,
             reselect_after_refresh: None,
             dev_switch_back: None,
             first_render_traced: false,
             _subscriptions: subscriptions,
         }
+    }
+
+    fn session(&self) -> &Session {
+        &self.sessions[self.current.min(self.sessions.len() - 1)]
+    }
+
+    fn session_mut(&mut self) -> &mut Session {
+        let ix = self.current.min(self.sessions.len() - 1);
+        &mut self.sessions[ix]
+    }
+
+    fn messages(&self) -> Entity<MessagesView> {
+        self.session().messages.clone()
+    }
+
+    fn produce(&self) -> Entity<ProduceView> {
+        self.session().produce.clone()
+    }
+
+    fn consumers(&self) -> Entity<ConsumersView> {
+        self.session().consumers.clone()
+    }
+
+    fn session_label(&self, session: &Session) -> String {
+        if let Some(topic) = &session.topic {
+            return topic.name.clone();
+        }
+        if let Some(id) = &session.connection {
+            if let Some(profile) = self.profiles.iter().find(|p| p.id == *id) {
+                return profile.name.clone();
+            }
+        }
+        "New tab".to_string()
+    }
+
+    /// Points the sidebar at the current tab. It reads the cached cluster only,
+    /// so a switch between tabs asks the broker for nothing.
+    fn sync_sidebar_to_session(&mut self, cx: &mut Context<Self>) {
+        let topics: Vec<Arc<TopicInfo>> = match self
+            .session()
+            .connection
+            .as_deref()
+            .and_then(|id| self.states.get(id))
+        {
+            Some(ConnState::Connected(cluster)) => cluster.topics.iter().cloned().map(Arc::new).collect(),
+            _ => Vec::new(),
+        };
+        self.set_topics(topics, cx);
+        let selected = self.session().topic.as_ref().map(|t| t.name.clone());
+        if let Some(name) = selected {
+            self.topics.update(cx, |list, cx| {
+                list.delegate_mut().select_topic(&name);
+                cx.notify();
+            });
+        }
+    }
+
+    fn add_session(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.sessions.len() >= MAX_TABS {
+            window.push_notification(
+                Notification::warning(format!("A window holds at most {MAX_TABS} tabs")),
+                cx,
+            );
+            return false;
+        }
+        let id = self.next_session_id;
+        self.next_session_id += 1;
+        self.sessions.push(Session::new(id, window, cx));
+        self.current = self.sessions.len() - 1;
+        true
+    }
+
+    fn on_new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
+        if self.add_session(window, cx) {
+            self.sync_sidebar_to_session(cx);
+            crate::startup::trace(&format!("new tab: {} of {MAX_TABS}", self.sessions.len()));
+            cx.notify();
+        }
+    }
+
+    fn on_duplicate_tab(&mut self, _: &DuplicateTab, window: &mut Window, cx: &mut Context<Self>) {
+        let (connection, topic, tab) = {
+            let session = self.session();
+            (session.connection.clone(), session.topic.clone(), session.tab)
+        };
+        if !self.add_session(window, cx) {
+            return;
+        }
+        {
+            let session = self.session_mut();
+            session.connection = connection;
+            session.topic = topic;
+            session.tab = tab;
+        }
+        self.sync_sidebar_to_session(cx);
+        self.sync_messages_view(window, cx);
+        crate::startup::trace(&format!("duplicated tab: {} of {MAX_TABS}", self.sessions.len()));
+        cx.notify();
+    }
+
+    fn close_session(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if ix >= self.sessions.len() {
+            return;
+        }
+        self.sessions.remove(ix);
+        if self.sessions.is_empty() {
+            let id = self.next_session_id;
+            self.next_session_id += 1;
+            self.sessions.push(Session::new(id, window, cx));
+            self.current = 0;
+        } else if self.current > ix || self.current >= self.sessions.len() {
+            self.current = self.current.saturating_sub(1).min(self.sessions.len() - 1);
+        }
+        self.sync_sidebar_to_session(cx);
+        cx.notify();
+    }
+
+    fn on_close_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
+        let ix = self.current;
+        self.close_session(ix, window, cx);
+    }
+
+    fn on_close_all_tabs(&mut self, _: &CloseAllTabs, window: &mut Window, cx: &mut Context<Self>) {
+        self.sessions.clear();
+        let id = self.next_session_id;
+        self.next_session_id += 1;
+        self.sessions.push(Session::new(id, window, cx));
+        self.current = 0;
+        self.sync_sidebar_to_session(cx);
+        cx.notify();
+    }
+
+    /// Shows another tab. It touches no view state, so nothing reloads.
+    fn select_session(&mut self, ix: usize, cx: &mut Context<Self>) {
+        if ix >= self.sessions.len() || ix == self.current {
+            return;
+        }
+        self.current = ix;
+        crate::startup::trace(&format!(
+            "select tab {ix}: connection={} topic={}",
+            self.session().connection.as_deref().unwrap_or("-"),
+            self.session().topic.as_ref().map_or("-", |t| t.name.as_str())
+        ));
+        self.sync_sidebar_to_session(cx);
+        cx.notify();
     }
 
     fn finish_loading(
@@ -170,7 +339,7 @@ impl KafkamitterApp {
         self.migrate_legacy_passwords(window, cx);
         self.settings = load_settings(&settings_path());
         let settings = self.settings.clone();
-        self.messages.update(cx, |view, cx| view.apply_settings(&settings, window, cx));
+        self.messages().update(cx, |view, cx| view.apply_settings(&settings, window, cx));
         if let Ok(bootstrap) = std::env::var("KAFKAMITTER_DEV_BOOTSTRAP") {
             self.profiles.push(ConnectionProfile {
                 id: DEV_PROFILE_ID.into(),
@@ -295,7 +464,10 @@ impl KafkamitterApp {
             window.push_notification(Notification::error(format!("Cannot save settings: {err}")), cx);
         }
         self.settings = settings.clone();
-        self.messages.update(cx, |view, cx| view.apply_settings(&settings, window, cx));
+        let views: Vec<_> = self.sessions.iter().map(|s| s.messages.clone()).collect();
+        for view in views {
+            view.update(cx, |view, cx| view.apply_settings(&settings, window, cx));
+        }
         cx.notify();
     }
 
@@ -304,38 +476,38 @@ impl KafkamitterApp {
     }
 
     fn on_go_to_top(&mut self, _: &GoToTop, window: &mut Window, cx: &mut Context<Self>) {
-        self.messages.update(cx, |view, cx| view.go_to_top(window, cx));
+        self.messages().update(cx, |view, cx| view.go_to_top(window, cx));
     }
 
     fn on_go_to_bottom(&mut self, _: &GoToBottom, window: &mut Window, cx: &mut Context<Self>) {
-        self.messages.update(cx, |view, cx| view.go_to_bottom(window, cx));
+        self.messages().update(cx, |view, cx| view.go_to_bottom(window, cx));
     }
 
     fn on_focus_message_value(&mut self, _: &FocusMessageValue, window: &mut Window, cx: &mut Context<Self>) {
-        if self.tab == MainTab::Messages {
-            self.messages.update(cx, |view, cx| view.focus_value(window, cx));
+        if self.session().tab == MainTab::Messages {
+            self.messages().update(cx, |view, cx| view.focus_value(window, cx));
         }
     }
 
     fn on_focus_search(&mut self, _: &FocusSearch, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected_topic.is_none() {
+        if self.session().topic.is_none() {
             return;
         }
-        self.tab = MainTab::Messages;
-        self.messages.update(cx, |view, cx| view.focus_search(window, cx));
+        self.session_mut().tab = MainTab::Messages;
+        self.messages().update(cx, |view, cx| view.focus_search(window, cx));
         cx.notify();
     }
 
     fn on_consume_selected(&mut self, _: &ConsumeSelected, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected_topic.is_some() {
-            self.tab = MainTab::Messages;
-            self.messages.update(cx, |view, cx| view.start_default(window, cx));
+        if self.session().topic.is_some() {
+            self.session_mut().tab = MainTab::Messages;
+            self.messages().update(cx, |view, cx| view.start_default(window, cx));
             cx.notify();
         }
     }
 
     fn on_stop_consume(&mut self, _: &StopConsume, _window: &mut Window, cx: &mut Context<Self>) {
-        self.messages.update(cx, |view, cx| view.stop(cx));
+        self.messages().update(cx, |view, cx| view.stop(cx));
     }
 
     fn switch_connection_by_offset(&mut self, offset: isize, window: &mut Window, cx: &mut Context<Self>) {
@@ -344,7 +516,8 @@ impl KafkamitterApp {
         }
         let len = self.profiles.len() as isize;
         let current = self
-            .active
+            .session()
+            .connection
             .as_deref()
             .and_then(|id| self.profiles.iter().position(|p| p.id == id))
             .map_or(-1, |ix| ix as isize);
@@ -369,7 +542,7 @@ impl KafkamitterApp {
     }
 
     fn on_edit_active_connection(&mut self, _: &EditActiveConnection, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(id) = self.active.clone() {
+        if let Some(id) = self.session().connection.clone() {
             self.edit_profile(&id, window, cx);
         }
     }
@@ -419,14 +592,14 @@ impl KafkamitterApp {
     }
 
     fn disconnect(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        if self.active.as_deref() == Some(id) {
+        if self.session().connection.as_deref() == Some(id) {
             self.remember_current_view();
         }
         self.kafka.disconnect(id);
         self.states.remove(id);
-        if self.active.as_deref() == Some(id) {
-            self.active = None;
-            self.selected_topic = None;
+        if self.session().connection.as_deref() == Some(id) {
+            self.session_mut().connection = None;
+            self.session_mut().topic = None;
             self.set_topics(Vec::new(), cx);
             self.sync_messages_view(window, cx);
         }
@@ -479,12 +652,12 @@ impl KafkamitterApp {
 
     /// Stores the topic and the tab of the active connection before leaving it.
     fn remember_current_view(&mut self) {
-        if let Some(id) = self.active.clone() {
+        if let Some(id) = self.session().connection.clone() {
             self.views.insert(
                 id,
                 ConnectionView {
-                    topic: self.selected_topic.as_ref().map(|t| t.name.clone()),
-                    tab: self.tab,
+                    topic: self.session().topic.as_ref().map(|t| t.name.clone()),
+                    tab: self.session().tab,
                 },
             );
         }
@@ -495,32 +668,32 @@ impl KafkamitterApp {
         let Some(view) = self.views.get(id).cloned() else {
             return;
         };
-        self.tab = view.tab;
+        self.session_mut().tab = view.tab;
         if let Some(name) = view.topic {
             self.select_topic_by_name(&name, cx);
-            if self.selected_topic.is_some() {
-                crate::startup::trace(&format!("restored view: {name} on tab {}", self.tab.label()));
+            if self.session().topic.is_some() {
+                crate::startup::trace(&format!("restored view: {name} on tab {}", self.session().tab.label()));
             }
         }
     }
 
     fn activate_connection(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
-        if self.active.as_deref() == Some(id.as_str()) {
+        if self.session().connection.as_deref() == Some(id.as_str()) {
             return;
         }
         self.remember_current_view();
         match self.states.get(&id) {
             Some(ConnState::Connected(cluster)) => {
                 let topics = cluster.topics.iter().cloned().map(Arc::new).collect();
-                self.active = Some(id.clone());
-                self.selected_topic = None;
+                self.session_mut().connection = Some(id.clone());
+                self.session_mut().topic = None;
                 self.set_topics(topics, cx);
                 self.restore_view(&id, cx);
                 self.sync_messages_view(window, cx);
                 cx.notify();
             }
             Some(ConnState::Connecting) => {
-                self.active = Some(id);
+                self.session_mut().connection = Some(id);
                 cx.notify();
             }
             _ => self.connect(id, window, cx),
@@ -536,13 +709,13 @@ impl KafkamitterApp {
             .get(&profile.id)
             .cloned()
             .or_else(|| profile.password.clone());
-        if self.active.as_deref() != Some(id.as_str()) {
+        if self.session().connection.as_deref() != Some(id.as_str()) {
             self.remember_current_view();
         }
         let worker = self.kafka.worker(&profile, password.as_deref());
         self.states.insert(id.clone(), ConnState::Connecting);
-        self.active = Some(id.clone());
-        self.selected_topic = None;
+        self.session_mut().connection = Some(id.clone());
+        self.session_mut().topic = None;
         self.set_topics(Vec::new(), cx);
         self.sync_messages_view(window, cx);
         cx.notify();
@@ -554,8 +727,8 @@ impl KafkamitterApp {
     }
 
     fn refresh_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(id) = self.active.clone() {
-            let selected = self.selected_topic.as_ref().map(|t| t.name.clone());
+        if let Some(id) = self.session().connection.clone() {
+            let selected = self.session().topic.as_ref().map(|t| t.name.clone());
             self.connect(id, window, cx);
             self.reselect_after_refresh = selected;
         }
@@ -577,7 +750,7 @@ impl KafkamitterApp {
                 ));
                 let cluster = Rc::new(cluster);
                 self.states.insert(id.clone(), ConnState::Connected(cluster.clone()));
-                if self.active.as_deref() == Some(&id) {
+                if self.session().connection.as_deref() == Some(&id) {
                     let topics: Vec<Arc<TopicInfo>> = cluster.topics.iter().cloned().map(Arc::new).collect();
                     self.set_topics(topics, cx);
                     match self.reselect_after_refresh.take() {
@@ -589,28 +762,29 @@ impl KafkamitterApp {
                         self.select_topic_by_name(&name, cx);
                         self.sync_messages_view(window, cx);
                         if let Ok(tab) = std::env::var("KAFKAMITTER_DEV_TAB") {
-                            self.tab = match tab.as_str() {
+                            self.session_mut().tab = match tab.as_str() {
                                 "produce" => MainTab::Produce,
                                 "consumers" => MainTab::Consumers,
                                 _ => MainTab::Messages,
                             };
-                            if self.tab == MainTab::Consumers {
-                                self.consumers.update(cx, |view, cx| {
+                            if self.session().tab == MainTab::Consumers {
+                                self.consumers().update(cx, |view, cx| {
                                     view.set_include_inactive(true);
                                     view.ensure_loaded(window, cx);
                                 });
                             }
                         }
                         if let Ok(query) = std::env::var("KAFKAMITTER_DEV_SEARCH") {
-                            self.messages.update(cx, |view, cx| view.set_search(&query, window, cx));
+                            self.messages().update(cx, |view, cx| view.set_search(&query, window, cx));
                         }
                         if std::env::var_os("KAFKAMITTER_DEV_PRODUCE").is_some() {
-                            self.produce.update(cx, |view, cx| view.send_test_message(window, cx));
+                            self.produce().update(cx, |view, cx| view.send_test_message(window, cx));
                         }
                         if std::env::var_os("KAFKAMITTER_DEV_CONSUME").is_some() && !self.settings.auto_consume_on_select {
-                            self.messages.update(cx, |view, cx| view.start_default(window, cx));
+                            self.messages().update(cx, |view, cx| view.start_default(window, cx));
                         }
                     }
+                    self.run_dev_tab_test(window, cx);
                     self.run_dev_switch_test(&id, window, cx);
                 }
             }
@@ -625,19 +799,56 @@ impl KafkamitterApp {
     }
 
     /// Switches to another connection and back, to prove the view is remembered.
+    /// Drives the tab actions so their effects show up in the startup trace.
+    fn run_dev_tab_test(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if std::env::var_os("KAFKAMITTER_DEV_TABTEST").is_none() {
+            return;
+        }
+        let mode = std::env::var("KAFKAMITTER_DEV_TABTEST").unwrap_or_default();
+        crate::startup::trace(&format!("tabtest: start with {} tab(s)", self.sessions.len()));
+        self.on_new_tab(&NewTab, window, cx);
+        crate::startup::trace(&format!(
+            "tabtest: new tab shows connection={} topic={}",
+            self.session().connection.as_deref().unwrap_or("-"),
+            self.session().topic.as_ref().map_or("-", |t| t.name.as_str())
+        ));
+        if mode == "new" {
+            crate::startup::trace("tabtest: staying on the new tab");
+            return;
+        }
+        self.select_session(0, cx);
+        if mode == "switch" {
+            crate::startup::trace("tabtest: switch only, leaving the session running");
+            return;
+        }
+        self.on_duplicate_tab(&DuplicateTab, window, cx);
+        while self.sessions.len() < MAX_TABS + 2 {
+            let before = self.sessions.len();
+            self.on_new_tab(&NewTab, window, cx);
+            if self.sessions.len() == before {
+                break;
+            }
+        }
+        crate::startup::trace(&format!("tabtest: capped at {} tab(s)", self.sessions.len()));
+        self.on_close_tab(&CloseTab, window, cx);
+        crate::startup::trace(&format!("tabtest: after close {} tab(s)", self.sessions.len()));
+        self.on_close_all_tabs(&CloseAllTabs, window, cx);
+        crate::startup::trace(&format!("tabtest: after close all {} tab(s)", self.sessions.len()));
+    }
+
     fn run_dev_switch_test(&mut self, loaded_id: &str, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(back_id) = self.dev_switch_back.take() {
             // Clear the view on the second connection, so a restored value can only
             // come from the remembered state of the first one.
-            self.selected_topic = None;
-            self.tab = MainTab::Messages;
+            self.session_mut().topic = None;
+            self.session_mut().tab = MainTab::Messages;
             self.sync_messages_view(window, cx);
             crate::startup::trace("switch test: second connection reset to topic=- tab=Messages");
             self.activate_connection(back_id, window, cx);
             crate::startup::trace(&format!(
                 "switch test result: topic={} tab={}",
-                self.selected_topic.as_ref().map_or("-", |t| t.name.as_str()),
-                self.tab.label()
+                self.session().topic.as_ref().map_or("-", |t| t.name.as_str()),
+                self.session().tab.label()
             ));
             return;
         }
@@ -649,8 +860,8 @@ impl KafkamitterApp {
         };
         crate::startup::trace(&format!(
             "switch test: leaving topic={} tab={}",
-            self.selected_topic.as_ref().map_or("-", |t| t.name.as_str()),
-            self.tab.label()
+            self.session().topic.as_ref().map_or("-", |t| t.name.as_str()),
+            self.session().tab.label()
         ));
         self.dev_switch_back = Some(loaded_id.to_string());
         self.activate_connection(other_id, window, cx);
@@ -669,7 +880,7 @@ impl KafkamitterApp {
             cx.notify();
             ix.and_then(|ix| list.delegate().topic_at(ix))
         });
-        self.selected_topic = found;
+        self.session_mut().topic = found;
     }
 
     fn toggle_internal_topics(&mut self, cx: &mut Context<Self>) {
@@ -689,27 +900,27 @@ impl KafkamitterApp {
         cx: &mut Context<Self>,
     ) {
         if let ListEvent::Select(ix) | ListEvent::Confirm(ix) = event {
-            self.selected_topic = list.read(cx).delegate().topic_at(*ix);
+            self.session_mut().topic = list.read(cx).delegate().topic_at(*ix);
             self.sync_messages_view(window, cx);
             cx.notify();
         }
     }
 
     fn sync_messages_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let worker = self.active.as_deref().and_then(|id| self.kafka.existing(id));
-        let topic = self.selected_topic.clone();
+        let worker = self.session().connection.as_deref().and_then(|id| self.kafka.existing(id));
+        let topic = self.session().topic.clone();
         let changed = self
-            .messages
+            .messages()
             .update(cx, |view, cx| view.set_topic(worker.clone(), topic.clone(), window, cx));
-        self.produce.update(cx, |view, cx| view.set_topic(worker.clone(), topic.clone(), window, cx));
-        self.consumers.update(cx, |view, cx| view.set_topic(worker.clone(), topic.clone(), window, cx));
+        self.produce().update(cx, |view, cx| view.set_topic(worker.clone(), topic.clone(), window, cx));
+        self.consumers().update(cx, |view, cx| view.set_topic(worker.clone(), topic.clone(), window, cx));
         if changed && worker.is_some() && topic.is_some() && self.settings.auto_consume_on_select {
-            self.messages.update(cx, |view, cx| view.start_default(window, cx));
+            self.messages().update(cx, |view, cx| view.start_default(window, cx));
         }
     }
 
     fn active_worker(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<Rc<WorkerHandle>> {
-        let worker = self.active.as_deref().and_then(|id| self.kafka.existing(id));
+        let worker = self.session().connection.as_deref().and_then(|id| self.kafka.existing(id));
         if worker.is_none() {
             window.push_notification(Notification::warning("Connect to a cluster first"), cx);
         }
@@ -781,8 +992,8 @@ impl KafkamitterApp {
                 Ok(()) => {
                     crate::startup::trace(&format!("topic deleted: {name}"));
                     window.push_notification(Notification::success(format!("Deleted topic {name}")), cx);
-                    if app.selected_topic.as_ref().is_some_and(|t| t.name == name) {
-                        app.selected_topic = None;
+                    if app.session().topic.as_ref().is_some_and(|t| t.name == name) {
+                        app.session_mut().topic = None;
                         app.sync_messages_view(window, cx);
                     }
                     app.refresh_active(window, cx);
@@ -797,7 +1008,7 @@ impl KafkamitterApp {
     }
 
     fn active_cluster(&self) -> Option<&Rc<ClusterInfo>> {
-        match self.active.as_deref().and_then(|id| self.states.get(id)) {
+        match self.session().connection.as_deref().and_then(|id| self.states.get(id)) {
             Some(ConnState::Connected(cluster)) => Some(cluster),
             _ => None,
         }
@@ -805,7 +1016,7 @@ impl KafkamitterApp {
 
     fn render_connection_row(&self, ix: usize, profile: &ConnectionProfile, cx: &mut Context<Self>) -> AnyElement {
         let id = profile.id.clone();
-        let is_active = self.active.as_deref() == Some(profile.id.as_str());
+        let is_active = self.session().connection.as_deref() == Some(profile.id.as_str());
         let (dot, hint) = match self.states.get(&profile.id) {
             Some(ConnState::Connected(cluster)) => (
                 cx.theme().green,
@@ -1013,12 +1224,67 @@ impl KafkamitterApp {
             .into_any_element()
     }
 
+    fn render_session_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
+        let tabs: Vec<Tab> = self
+            .sessions
+            .iter()
+            .enumerate()
+            .map(|(ix, session)| {
+                Tab::new()
+                    .label(self.session_label(session))
+                    .suffix(
+                        Button::new(("close-tab", session.id as usize))
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::Close)
+                            .tooltip("Close tab")
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.close_session(ix, window, cx)
+                            })),
+                    )
+            })
+            .collect();
+        let full = self.sessions.len() >= MAX_TABS;
+        TabBar::new("session-tabs")
+            .w_full()
+            .px_2()
+            .selected_index(self.current)
+            .on_click(cx.listener(|this, ix: &usize, _, cx| this.select_session(*ix, cx)))
+            .children(tabs)
+            .suffix(
+                Button::new("new-tab")
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::Plus)
+                    .disabled(full)
+                    .tooltip(if full {
+                        format!("A window holds at most {MAX_TABS} tabs")
+                    } else {
+                        "New tab".to_string()
+                    })
+                    .on_click(cx.listener(|this, _, window, cx| this.on_new_tab(&NewTab, window, cx))),
+            )
+            .into_any_element()
+    }
+
     fn render_main(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let Some(topic) = self.selected_topic.clone() else {
-            let hint = if self.active.is_some() {
+        v_flex()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .child(self.render_session_tabs(cx))
+            .child(self.render_session_content(window, cx))
+            .into_any_element()
+    }
+
+    fn render_session_content(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let Some(topic) = self.session().topic.clone() else {
+            let hint = if self.session().connection.is_some() {
                 "Select a topic"
-            } else {
+            } else if self.profiles.is_empty() {
                 "Add a connection to start"
+            } else {
+                "Select a connection from the left"
             };
             return v_flex()
                 .flex_1()
@@ -1030,13 +1296,13 @@ impl KafkamitterApp {
                 .into_any_element();
         };
         let replication = topic.partitions.first().map_or(0, |p| p.replicas.len());
-        let tab_ix = MainTab::ALL.iter().position(|t| *t == self.tab).unwrap_or(0);
-        let content: AnyElement = match self.tab {
-            MainTab::Messages => self.messages.clone().into_any_element(),
-            MainTab::Produce => self.produce.clone().into_any_element(),
+        let tab_ix = MainTab::ALL.iter().position(|t| *t == self.session().tab).unwrap_or(0);
+        let content: AnyElement = match self.session().tab {
+            MainTab::Messages => self.messages().into_any_element(),
+            MainTab::Produce => self.produce().into_any_element(),
             MainTab::Consumers => {
-                self.consumers.update(cx, |view, cx| view.ensure_loaded(window, cx));
-                self.consumers.clone().into_any_element()
+                self.consumers().update(cx, |view, cx| view.ensure_loaded(window, cx));
+                self.consumers().into_any_element()
             }
         };
         v_flex()
@@ -1065,7 +1331,7 @@ impl KafkamitterApp {
                     .px_3()
                     .selected_index(tab_ix)
                     .on_click(cx.listener(|this, ix: &usize, _, cx| {
-                        this.tab = MainTab::ALL[(*ix).min(MainTab::ALL.len() - 1)];
+                        this.session_mut().tab = MainTab::ALL[(*ix).min(MainTab::ALL.len() - 1)];
                         cx.notify();
                     }))
                     .children(MainTab::ALL.iter().map(|t| Tab::new().label(t.label()))),
@@ -1087,7 +1353,7 @@ impl Render for KafkamitterApp {
         let summary = self.active_cluster().map(|cluster| {
             format!(
                 "{} · {} brokers",
-                self.active
+                self.session().connection
                     .as_deref()
                     .and_then(|id| self.profiles.iter().find(|p| p.id == id))
                     .map_or("", |p| p.name.as_str()),
@@ -1112,6 +1378,10 @@ impl Render for KafkamitterApp {
             .on_action(cx.listener(Self::on_edit_active_connection))
             .on_action(cx.listener(Self::on_consume_selected))
             .on_action(cx.listener(Self::on_stop_consume))
+            .on_action(cx.listener(Self::on_new_tab))
+            .on_action(cx.listener(Self::on_duplicate_tab))
+            .on_action(cx.listener(Self::on_close_tab))
+            .on_action(cx.listener(Self::on_close_all_tabs))
             .child(
                 TitleBar::new().child(
                     h_flex()

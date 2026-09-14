@@ -58,6 +58,10 @@ Read the consumer groups of a topic, with the committed offset and the lag of ev
 
 | Keys | Action |
 | --- | --- |
+| Cmd+T | New tab |
+| Cmd+D | Duplicate the current tab |
+| Cmd+W | Close the current tab |
+| Cmd+Shift+W | Close every tab |
 | Cmd+, | Open Settings |
 | Cmd+1 to Cmd+9 | Switch to connection 1 to 9 |
 | Cmd+Shift+] | Next connection |
@@ -85,6 +89,12 @@ Cmd+, opens the settings dialog. The app saves the settings in `~/Library/Applic
 | Newest messages per partition | 200 | How many messages the default start mode reads from each partition. |
 | Maximum messages kept | 10 000 | The table drops the oldest message above this count. |
 | Maximum memory for messages | 256 MB | The table drops the oldest message above this size. |
+
+## Tabs
+
+Every tab is its own session. It keeps its connection, its topic, the sub-tab you were on, the messages it consumed, the search term, and the sort order. Switching between tabs loads nothing again, because each tab owns its views and its consumer keeps running in the background.
+
+A new tab starts empty and asks you to select a connection from the left. Duplicating a tab copies the connection, the topic, and the sub-tab into a fresh session, which then loads its own messages. A window holds at most 13 tabs. Closing the last tab leaves one empty tab behind.
 
 ## What the app remembers per connection
 
@@ -220,6 +230,7 @@ These environment variables drive the app for measurements and automated checks.
 | `KAFKAMITTER_DEV_SELECT_GROUP=1` | Load the offsets of the first consumer group. |
 | `KAFKAMITTER_DEV_PRODUCE=1` | Send one test message to the selected topic. |
 | `KAFKAMITTER_DEV_SEARCH=term` | Put this term in the message search box after the topic is selected. |
+| `KAFKAMITTER_DEV_TABTEST=mode` | Drive the tab actions once the topic loads. `new` opens a tab and stays on it, `switch` opens one and returns, anything else runs the whole lifecycle. |
 | `KAFKAMITTER_DEV_JUMP=top` | Select the first or the last row once every partition is caught up. Accepts `top` or `bottom`. |
 | `KAFKAMITTER_DEV_WINDOW=WxH` | Open the window at this size, to check the layout at a narrow width. |
 | `KAFKAMITTER_DEV_EDIT=name` | Open the edit dialog for the saved connection with this name. |

@@ -116,11 +116,17 @@ fn restrict_to_owner(path: &Path) -> std::io::Result<()> {
 }
 
 pub fn new_profile_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    /// Two profiles can be created inside one clock tick, so a counter
+    /// keeps their ids apart. Importing several files at once does this.
+    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    format!("{:x}-{:x}", nanos, std::process::id())
+    let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("{:x}-{:x}-{:x}", nanos, std::process::id(), sequence)
 }
 
 #[cfg(test)]
@@ -177,9 +183,8 @@ mod tests {
     }
 
     #[test]
-    fn profile_ids_are_unique() {
-        let a = new_profile_id();
-        let b = new_profile_id();
-        assert_ne!(a, b);
+    fn profile_ids_are_unique_even_inside_one_clock_tick() {
+        let ids: std::collections::HashSet<String> = (0..1000).map(|_| new_profile_id()).collect();
+        assert_eq!(ids.len(), 1000, "every generated id must differ");
     }
 }

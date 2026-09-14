@@ -9,7 +9,8 @@ use gpui::*;
 use gpui_component::{Root, TitleBar};
 
 use app::{
-    ConsumeSelected, EditActiveConnection, FocusMessageValue, GoToBottom, GoToTop, NextConnection,
+    CloseAllTabs, CloseTab, ConsumeSelected, DuplicateTab, EditActiveConnection, FocusMessageValue,
+    GoToBottom, GoToTop, NewTab, NextConnection,
     FocusSearch, OpenSettings, PreviousConnection, Quit, StopConsume, SwitchConnection,
 };
 
@@ -26,6 +27,10 @@ fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-e", EditActiveConnection, None),
         KeyBinding::new("cmd-r", ConsumeSelected, None),
         KeyBinding::new("cmd-.", StopConsume, None),
+        KeyBinding::new("cmd-t", NewTab, None),
+        KeyBinding::new("cmd-d", DuplicateTab, None),
+        KeyBinding::new("cmd-w", CloseTab, None),
+        KeyBinding::new("cmd-shift-w", CloseAllTabs, None),
     ];
     for index in 0..9 {
         bindings.push(KeyBinding::new(
@@ -45,6 +50,17 @@ fn menus() -> Vec<Menu> {
                 MenuItem::action("Settings…", OpenSettings),
                 MenuItem::Separator,
                 MenuItem::action("Quit", Quit),
+            ],
+            disabled: false,
+        },
+        Menu {
+            name: "Tab".into(),
+            items: vec![
+                MenuItem::action("New tab", NewTab),
+                MenuItem::action("Duplicate tab", DuplicateTab),
+                MenuItem::Separator,
+                MenuItem::action("Close tab", CloseTab),
+                MenuItem::action("Close all tabs", CloseAllTabs),
             ],
             disabled: false,
         },
