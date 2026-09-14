@@ -115,6 +115,19 @@ kafkamitter --import ~/kafka/staging.properties
 
 `--import` saves the file as a connection, with its password. A connection with the same name is replaced.
 
+## Install
+
+```sh
+brew tap isdaniarf/tap
+brew install --cask kafkamitter
+```
+
+Homebrew 6 asks you to trust a third-party tap once. Run `brew trust isdaniarf/tap` if it does.
+
+The cask clears the macOS quarantine flag after it installs the app, so Gatekeeper does not block it. The app carries an ad-hoc signature and is not notarized.
+
+Update with `brew upgrade --cask kafkamitter`. Remove the app and its settings with `brew uninstall --zap --cask kafkamitter`.
+
 ## Requirements
 
 - macOS 13 or later on Apple Silicon or Intel.
@@ -136,6 +149,14 @@ scripts/bundle.sh
 ```
 
 The script signs the bundle with an ad-hoc signature. It does not notarize the app.
+
+Package a release archive for the Homebrew tap:
+
+```sh
+scripts/release.sh
+```
+
+It builds the bundle, writes `dist/Kafkamitter-<version>-<arch>.zip`, and prints the SHA-256 for the cask. Upload the archive to a release in `isdaniarf/homebrew-tap` and update `Casks/kafkamitter.rb` with the new version and hash.
 
 ## Local broker for development
 
