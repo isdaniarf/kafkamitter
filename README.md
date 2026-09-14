@@ -1,4 +1,4 @@
-# Kafkamitter
+![Kafkamitter](assets/kafkamitter-header.png)
 
 Kafkamitter is a native Kafka client for macOS. It is written in Rust with Zed's GPUI framework and librdkafka. The app starts in about 0.2 seconds, keeps memory bounded, and ships as one binary of 18 MB.
 
