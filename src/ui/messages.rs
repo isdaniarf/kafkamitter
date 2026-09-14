@@ -10,6 +10,7 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::notification::Notification;
 use gpui_component::resizable::{ResizableState, resizable_panel, v_resizable};
 use gpui_component::select::{Select, SelectState};
+use gpui_component::menu::{PopupMenu, PopupMenuItem};
 use gpui_component::table::{Column, ColumnSort, DataTable, TableDelegate, TableEvent, TableState};
 use gpui_component::{ActiveTheme, Icon, IconName, IndexPath, Size, Sizable, WindowExt, h_flex, v_flex};
 
@@ -192,6 +193,48 @@ impl TableDelegate for MessageTableDelegate {
             // would overwrite the one before it.
             .child(SelectableText::new(("cell", order), text).document_order(order as u64))
             .into_any_element()
+    }
+
+    /// Right-clicking a row copies its parts. This works without a drag, so it
+    /// does not depend on the text selection gesture.
+    fn context_menu(
+        &mut self,
+        row_ix: usize,
+        menu: PopupMenu,
+        _window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> PopupMenu {
+        let Some(record) = self.record_at_row(row_ix) else {
+            return menu;
+        };
+        let text = |bytes: Option<&[u8]>| {
+            bytes.map_or_else(String::new, |b| String::from_utf8_lossy(b).into_owned())
+        };
+        let value = text(record.value.as_deref());
+        let key = text(record.key.as_deref());
+        let row = (0..self.columns.len())
+            .map(|col_ix| self.cell_text(row_ix, col_ix, cx))
+            .collect::<Vec<_>>()
+            .join("\t");
+        let headers = record
+            .headers
+            .iter()
+            .map(|(name, value)| format!("{name}: {}", text(value.as_deref())))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let copy = |label: &'static str, text: String| {
+            PopupMenuItem::new(label).on_click(move |_, _, cx: &mut App| {
+                cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+            })
+        };
+        menu.item(copy("Copy value", value))
+            .item(copy("Copy key", key))
+            .when(!headers.is_empty(), |menu| {
+                menu.item(copy("Copy headers", headers))
+            })
+            .separator()
+            .item(copy("Copy row", row))
     }
 
     /// The header uses the same size as the cells, so the two rows line up.

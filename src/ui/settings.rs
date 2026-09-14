@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use gpui::*;
 use gpui_component::input::{Input, InputState};
-use gpui_component::select::{Select, SelectState};
+use gpui_component::select::{Select, SelectEvent, SelectState};
 use gpui_component::notification::Notification;
 use gpui_component::switch::Switch;
 use gpui_component::{ActiveTheme, WindowExt, h_flex, v_flex};
@@ -30,12 +30,14 @@ fn switch_row(id: &'static str, label: &'static str, value: &Rc<Cell<bool>>) -> 
         .into_any_element()
 }
 
+/// Opens the settings dialog and returns the subscription that keeps the
+/// appearance dropdown live. The caller must hold it while the dialog is open.
 pub fn open_settings_dialog(
     app: WeakEntity<KafkamitterApp>,
     current: Settings,
     window: &mut Window,
     cx: &mut Context<KafkamitterApp>,
-) {
+) -> Subscription {
     let newest = cx.new(|cx| InputState::new(window, cx).default_value(current.newest_per_partition.to_string()));
     let max_messages = cx.new(|cx| InputState::new(window, cx).default_value(current.max_messages.to_string()));
     let max_megabytes = cx.new(|cx| InputState::new(window, cx).default_value(current.max_megabytes.to_string()));
@@ -54,9 +56,17 @@ pub fn open_settings_dialog(
             cx,
         )
     });
-    if let Some(entity) = app.upgrade() {
-        entity.update(cx, |this, cx| this.watch_theme_choice(&theme, window, cx));
-    }
+    // `cx` already belongs to the app, so subscribe through it. Reaching for the
+    // entity here would update it while it is being updated, which panics.
+    let theme_preview = cx.subscribe_in(
+        &theme,
+        window,
+        |_, select, _: &SelectEvent<Vec<SharedString>>, window, cx| {
+            let row = select.read(cx).selected_index(cx).map_or(0, |ix| ix.row);
+            let choice = ThemeChoice::ALL[row.min(ThemeChoice::ALL.len() - 1)];
+            KafkamitterApp::preview_theme(choice, window, cx);
+        },
+    );
     let saved = Rc::new(Cell::new(false));
     let auto_consume = Rc::new(Cell::new(current.auto_consume_on_select));
     let open_newest = Rc::new(Cell::new(current.open_newest_message));
@@ -155,4 +165,5 @@ pub fn open_settings_dialog(
                 true
             })
     });
+    theme_preview
 }

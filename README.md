@@ -38,6 +38,7 @@ Read the consumer groups of a topic, with the committed offset and the lag of ev
 - Inspect one message: value, key, and headers. Show the value as pretty JSON with the original key order and syntax colors.
 - Copy the value, the key, or the headers with one button.
 - Select the text in the message table with the mouse and copy it with Cmd+C.
+- Right-click a message row to copy its value, its key, its headers, or the whole row.
 
 **Produce**
 

@@ -9,7 +9,6 @@ use gpui_component::list::{List, ListEvent, ListState};
 use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_component::notification::Notification;
 use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
-use gpui_component::select::{SelectEvent, SelectState};
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{ActiveTheme, IconName, ThemeMode, Root, Size, Sizable, StyledExt, Theme, TitleBar, WindowExt, h_flex, v_flex};
 
@@ -486,24 +485,6 @@ impl KafkamitterApp {
         Self::preview_theme(self.settings.theme, window, cx);
     }
 
-    /// Keeps the dialog's appearance dropdown live while it is open.
-    pub fn watch_theme_choice(
-        &mut self,
-        select: &Entity<SelectState<Vec<SharedString>>>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.theme_preview = Some(cx.subscribe_in(
-            select,
-            window,
-            |_, select, _: &SelectEvent<Vec<SharedString>>, window, cx| {
-                let row = select.read(cx).selected_index(cx).map_or(0, |ix| ix.row);
-                let choice = ThemeChoice::ALL[row.min(ThemeChoice::ALL.len() - 1)];
-                Self::preview_theme(choice, window, cx);
-            },
-        ));
-    }
-
     pub fn apply_settings(&mut self, settings: Settings, window: &mut Window, cx: &mut Context<Self>) {
         if let Err(err) = save_settings(&settings_path(), &settings) {
             window.push_notification(Notification::error(format!("Cannot save settings: {err}")), cx);
@@ -518,7 +499,9 @@ impl KafkamitterApp {
     }
 
     fn on_open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
-        open_settings_dialog(cx.entity().downgrade(), self.settings.clone(), window, cx);
+        let subscription =
+            open_settings_dialog(cx.entity().downgrade(), self.settings.clone(), window, cx);
+        self.theme_preview = Some(subscription);
     }
 
     fn on_go_to_top(&mut self, _: &GoToTop, window: &mut Window, cx: &mut Context<Self>) {
