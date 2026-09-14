@@ -94,6 +94,8 @@ Cmd+, opens the settings dialog. The app saves the settings in `~/Library/Applic
 
 Every tab is its own session. It keeps its connection, its topic, the sub-tab you were on, the messages it consumed, the search term, and the sort order. Switching between tabs loads nothing again, because each tab owns its views and its consumer keeps running in the background.
 
+The tab strip sits above the topic header. Each tab carries a close cross, and a small `+` tab at the end opens another one. Right-click a tab for Duplicate tab, Close tab, and Close all tabs.
+
 A new tab starts empty and asks you to select a connection from the left. Duplicating a tab copies the connection, the topic, and the sub-tab into a fresh session, which then loads its own messages. A window holds at most 13 tabs. Closing the last tab leaves one empty tab behind.
 
 ## What the app remembers per connection

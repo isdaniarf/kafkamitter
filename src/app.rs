@@ -10,7 +10,7 @@ use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_component::notification::Notification;
 use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
 use gpui_component::tab::{Tab, TabBar};
-use gpui_component::{ActiveTheme, Disableable, IconName, Root, Size, Sizable, StyledExt, Theme, TitleBar, WindowExt, h_flex, v_flex};
+use gpui_component::{ActiveTheme, IconName, Root, Size, Sizable, StyledExt, Theme, TitleBar, WindowExt, h_flex, v_flex};
 
 use crate::kafka::KafkaService;
 use crate::kafka::metadata::{ClusterInfo, TopicInfo};
@@ -58,6 +58,7 @@ actions!(
 pub struct SwitchConnection {
     pub index: usize,
 }
+
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum MainTab {
@@ -257,10 +258,14 @@ impl KafkamitterApp {
     }
 
     fn on_duplicate_tab(&mut self, _: &DuplicateTab, window: &mut Window, cx: &mut Context<Self>) {
-        let (connection, topic, tab) = {
-            let session = self.session();
-            (session.connection.clone(), session.topic.clone(), session.tab)
+        self.duplicate_session(self.current, window, cx);
+    }
+
+    fn duplicate_session(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(source) = self.sessions.get(ix) else {
+            return;
         };
+        let (connection, topic, tab) = (source.connection.clone(), source.topic.clone(), source.tab);
         if !self.add_session(window, cx) {
             return;
         }
@@ -1225,44 +1230,109 @@ impl KafkamitterApp {
     }
 
     fn render_session_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
-        let tabs: Vec<Tab> = self
+        let full = self.sessions.len() >= MAX_TABS;
+        let radius = cx.theme().radius;
+        let tabs: Vec<AnyElement> = self
             .sessions
             .iter()
             .enumerate()
             .map(|(ix, session)| {
-                Tab::new()
-                    .label(self.session_label(session))
-                    .suffix(
-                        Button::new(("close-tab", session.id as usize))
+                let active = ix == self.current;
+                let key = session.id as usize;
+                h_flex()
+                    .id(("session-tab", key))
+                    .flex_none()
+                    .max_w(px(200.))
+                    .px_2p5()
+                    .py_1p5()
+                    .gap_1p5()
+                    .items_center()
+                    .rounded(radius)
+                    .cursor_pointer()
+                    .text_sm()
+                    .when(active, |el| {
+                        el.bg(cx.theme().tab_active)
+                            .text_color(cx.theme().tab_active_foreground)
+                    })
+                    .when(!active, |el| {
+                        el.text_color(cx.theme().tab_foreground)
+                            .hover(|style| style.bg(cx.theme().tab))
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| this.select_session(ix, cx)))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .child(self.session_label(session)),
+                    )
+                    .child(
+                        Button::new(("close-tab", key))
                             .ghost()
                             .xsmall()
                             .icon(IconName::Close)
-                            .tooltip("Close tab")
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.close_session(ix, window, cx)
                             })),
                     )
+                    .context_menu({
+                        let app = cx.entity().downgrade();
+                        move |menu, _, _| {
+                            let duplicate = app.clone();
+                            let close = app.clone();
+                            let close_all = app.clone();
+                            menu.item(PopupMenuItem::new("Duplicate tab").on_click(
+                                move |_, window, cx| {
+                                    let _ = duplicate
+                                        .update(cx, |app, cx| app.duplicate_session(ix, window, cx));
+                                },
+                            ))
+                            .item(PopupMenuItem::new("Close tab").on_click(move |_, window, cx| {
+                                let _ = close.update(cx, |app, cx| app.close_session(ix, window, cx));
+                            }))
+                            .separator()
+                            .item(PopupMenuItem::new("Close all tabs").on_click(
+                                move |_, window, cx| {
+                                    let _ = close_all.update(cx, |app, cx| {
+                                        app.on_close_all_tabs(&CloseAllTabs, window, cx)
+                                    });
+                                },
+                            ))
+                        }
+                    })
+                    .into_any_element()
             })
             .collect();
-        let full = self.sessions.len() >= MAX_TABS;
-        TabBar::new("session-tabs")
+
+        h_flex()
             .w_full()
+            .flex_none()
             .px_2()
-            .selected_index(self.current)
-            .on_click(cx.listener(|this, ix: &usize, _, cx| this.select_session(*ix, cx)))
+            .py_1()
+            .gap_0p5()
+            .items_center()
+            .overflow_x_hidden()
+            .bg(cx.theme().tab_bar)
+            .border_b_1()
+            .border_color(cx.theme().border)
             .children(tabs)
-            .suffix(
-                Button::new("new-tab")
-                    .ghost()
-                    .xsmall()
-                    .icon(IconName::Plus)
-                    .disabled(full)
-                    .tooltip(if full {
-                        format!("A window holds at most {MAX_TABS} tabs")
-                    } else {
-                        "New tab".to_string()
+            .child(
+                div()
+                    .id("new-tab")
+                    .flex_none()
+                    .px_2p5()
+                    .py_1p5()
+                    .rounded(radius)
+                    .text_sm()
+                    .when(full, |el| el.text_color(cx.theme().muted_foreground))
+                    .when(!full, |el| {
+                        el.cursor_pointer()
+                            .text_color(cx.theme().tab_foreground)
+                            .hover(|style| style.bg(cx.theme().tab))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.on_new_tab(&NewTab, window, cx)
+                            }))
                     })
-                    .on_click(cx.listener(|this, _, window, cx| this.on_new_tab(&NewTab, window, cx))),
+                    .child("+"),
             )
             .into_any_element()
     }
@@ -1382,6 +1452,7 @@ impl Render for KafkamitterApp {
             .on_action(cx.listener(Self::on_duplicate_tab))
             .on_action(cx.listener(Self::on_close_tab))
             .on_action(cx.listener(Self::on_close_all_tabs))
+
             .child(
                 TitleBar::new().child(
                     h_flex()
