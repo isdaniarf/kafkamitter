@@ -35,9 +35,9 @@ Read the consumer groups of a topic, with the committed offset and the lag of ev
 - Search the messages. The term matches the value, the key, and the header names and values. The table then shows only the messages that hold it.
 - Sort the table by any column. The first click sorts downward, the next click reverses it, and a third click returns to arrival order.
 - Resize the columns and drag them into a different order.
-- Inspect one message: value, key, and headers. Show the value as pretty JSON with the original key order and syntax colors.
+- Inspect one message: value, key, and headers. Show the value as pretty JSON with the original key order and syntax colors. The preview colors JSON only. A header line or a value that is not JSON stays plain.
 - Copy the value, the key, or the headers with one button.
-- Select the text in the message table with the mouse and copy it with Cmd+C.
+- Select the text in the message table with the mouse and copy it with Cmd+C. The list holds its place while you drag.
 - Right-click a message row to copy its value, its key, its headers, or the whole row.
 
 **Produce**
@@ -225,6 +225,10 @@ The unit tests run without a broker:
 cargo test
 ```
 
+They include window tests that open a GPUI window in memory, drag over a message
+row, and check the text that the selection holds. The first test build compiles
+GPUI a second time, because the test build needs the `test-support` feature.
+
 The integration test in `tests/broker.rs` needs a broker. It creates a temporary topic, produces, consumes from the beginning and from the newest offsets, commits a consumer group, checks the offsets and the lag, and deletes the topic.
 
 ```sh
@@ -256,6 +260,9 @@ These environment variables drive the app for measurements and automated checks.
 | `KAFKAMITTER_DEV_SETTINGS=1` | Open the settings dialog at startup. |
 | `KAFKAMITTER_DEV_RENAME=old=new` | Rename a saved connection through the dialog form code and save it. |
 | `KAFKAMITTER_DEV_SWITCH=name` | Switch to this connection and back, to check that the app remembers the view. |
+| `KAFKAMITTER_DEV_HEADERS=1` | Open the Headers tab of the preview after the newest message opens. |
+| `KAFKAMITTER_DEV_DRAGTEST=1` | Drag across a message row in the real window and print the selected text with the scroll offset before and after. The window must be on screen. |
+| `KAFKAMITTER_DEV_DRAG_Y=pixels` | Drag in this row instead of the first row that holds text. `KAFKAMITTER_DEV_DRAG_X0` and `KAFKAMITTER_DEV_DRAG_X1` set where the drag starts and ends. |
 
 ## Measurements
 
@@ -263,10 +270,10 @@ Measured on an Apple M-series Mac with the release build and the local Homebrew 
 
 | Metric | Value |
 | --- | --- |
-| Release binary | 18.3 MB |
-| App bundle | 18 MB |
-| Time to first render | 146 to 201 ms |
-| Time to cluster metadata after process start | 244 to 263 ms |
+| Release binary | 18.4 MB |
+| App bundle | 19 MB |
+| Time to first render | 174 to 221 ms |
+| Time to cluster metadata after process start | 254 to 358 ms |
 | Consume 1 000 000 messages of 512 bytes | 2.9 to 11.9 s, so 85 000 to 350 000 messages per second |
 | Resident memory during that consume | 112 to 120 MB, flat after the message cap |
 | Apply a search term to a full table | 5 ms for 10 000 messages and 17 MB |
