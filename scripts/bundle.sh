@@ -17,6 +17,7 @@ fi
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$ROOT/target/release/kafkamitter" "$APP/Contents/MacOS/kafkamitter"
+cp "$ROOT/assets/Kafkamitter.icns" "$APP/Contents/Resources/Kafkamitter.icns"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -31,6 +32,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <string>$BUNDLE_ID</string>
     <key>CFBundleExecutable</key>
     <string>kafkamitter</string>
+    <key>CFBundleIconFile</key>
+    <string>Kafkamitter</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleVersion</key>

@@ -2,6 +2,16 @@
 
 Kafkamitter is a native Kafka client for macOS. It is written in Rust with Zed's GPUI framework and librdkafka. The app starts in about 0.2 seconds, keeps memory bounded, and ships as one binary of 18 MB.
 
+## Screenshots
+
+Browse a topic, read its newest messages, and inspect one as pretty JSON.
+
+![Messages](docs/screenshots/messages.png)
+
+Read the consumer groups of a topic, with the committed offset and the lag of every partition.
+
+![Consumer groups](docs/screenshots/consumers.png)
+
 ## Features
 
 **Connections**
@@ -149,6 +159,14 @@ scripts/bundle.sh
 ```
 
 The script signs the bundle with an ad-hoc signature. It does not notarize the app.
+
+Rebuild the app icon after you change `assets/kafkamitter-icon.svg`:
+
+```sh
+scripts/make-icon.sh
+```
+
+It needs `rsvg-convert`, from `brew install librsvg`, and writes `assets/Kafkamitter.icns`.
 
 Package a release archive for the Homebrew tap:
 
