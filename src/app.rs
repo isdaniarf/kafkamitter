@@ -37,8 +37,8 @@ actions!(
     [
         Quit,
         OpenSettings,
-        GoToNewest,
-        GoToOldest,
+        GoToTop,
+        GoToBottom,
         FocusMessageValue,
         FocusSearch,
         NextConnection,
@@ -303,12 +303,12 @@ impl KafkamitterApp {
         open_settings_dialog(cx.entity().downgrade(), self.settings.clone(), window, cx);
     }
 
-    fn on_go_to_newest(&mut self, _: &GoToNewest, window: &mut Window, cx: &mut Context<Self>) {
-        self.messages.update(cx, |view, cx| view.go_to_newest(window, cx));
+    fn on_go_to_top(&mut self, _: &GoToTop, window: &mut Window, cx: &mut Context<Self>) {
+        self.messages.update(cx, |view, cx| view.go_to_top(window, cx));
     }
 
-    fn on_go_to_oldest(&mut self, _: &GoToOldest, window: &mut Window, cx: &mut Context<Self>) {
-        self.messages.update(cx, |view, cx| view.go_to_oldest(window, cx));
+    fn on_go_to_bottom(&mut self, _: &GoToBottom, window: &mut Window, cx: &mut Context<Self>) {
+        self.messages.update(cx, |view, cx| view.go_to_bottom(window, cx));
     }
 
     fn on_focus_message_value(&mut self, _: &FocusMessageValue, window: &mut Window, cx: &mut Context<Self>) {
@@ -1102,8 +1102,8 @@ impl Render for KafkamitterApp {
             .on_action(cx.listener(Self::on_create_topic))
             .on_action(cx.listener(Self::on_delete_topic))
             .on_action(cx.listener(Self::on_open_settings))
-            .on_action(cx.listener(Self::on_go_to_newest))
-            .on_action(cx.listener(Self::on_go_to_oldest))
+            .on_action(cx.listener(Self::on_go_to_top))
+            .on_action(cx.listener(Self::on_go_to_bottom))
             .on_action(cx.listener(Self::on_focus_message_value))
             .on_action(cx.listener(Self::on_focus_search))
             .on_action(cx.listener(Self::on_next_connection))

@@ -65,13 +65,13 @@ Read the consumer groups of a topic, with the committed offset and the lag of ev
 | Cmd+E | Edit the active connection |
 | Cmd+R | Consume the selected topic with the default start mode |
 | Cmd+. | Stop the consumer |
-| Cmd+Down | Go to the newest message and open it |
-| Cmd+Up | Go to the oldest message and open it |
+| Cmd+Up | Select the first row of the table and open it |
+| Cmd+Down | Select the last row of the table and open it |
 | Cmd+F | Focus the message search box |
 | Return | Focus the message value in the preview |
 | Cmd+Q | Quit |
 
-The Connection and Topic menus in the menu bar list the same actions. Return and the Cmd+arrow keys stay inactive while a text field or the topic list has focus.
+The Connection and Topic menus in the menu bar list the same actions. Cmd+Up and Cmd+Down move to the first and the last row of the table. They follow what you see, so a sort or a search term changes where they land. Return and the Cmd+arrow keys stay inactive while a text field or the topic list has focus.
 
 ## Settings
 
@@ -220,6 +220,7 @@ These environment variables drive the app for measurements and automated checks.
 | `KAFKAMITTER_DEV_SELECT_GROUP=1` | Load the offsets of the first consumer group. |
 | `KAFKAMITTER_DEV_PRODUCE=1` | Send one test message to the selected topic. |
 | `KAFKAMITTER_DEV_SEARCH=term` | Put this term in the message search box after the topic is selected. |
+| `KAFKAMITTER_DEV_JUMP=top` | Select the first or the last row once every partition is caught up. Accepts `top` or `bottom`. |
 | `KAFKAMITTER_DEV_WINDOW=WxH` | Open the window at this size, to check the layout at a narrow width. |
 | `KAFKAMITTER_DEV_EDIT=name` | Open the edit dialog for the saved connection with this name. |
 | `KAFKAMITTER_DEV_SETTINGS=1` | Open the settings dialog at startup. |

@@ -9,7 +9,7 @@ use gpui::*;
 use gpui_component::{Root, TitleBar};
 
 use app::{
-    ConsumeSelected, EditActiveConnection, FocusMessageValue, GoToNewest, GoToOldest, NextConnection,
+    ConsumeSelected, EditActiveConnection, FocusMessageValue, GoToBottom, GoToTop, NextConnection,
     FocusSearch, OpenSettings, PreviousConnection, Quit, StopConsume, SwitchConnection,
 };
 
@@ -17,8 +17,8 @@ fn key_bindings() -> Vec<KeyBinding> {
     let mut bindings = vec![
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-,", OpenSettings, None),
-        KeyBinding::new("cmd-down", GoToNewest, Some("!Input && !List")),
-        KeyBinding::new("cmd-up", GoToOldest, Some("!Input && !List")),
+        KeyBinding::new("cmd-up", GoToTop, Some("!Input && !List")),
+        KeyBinding::new("cmd-down", GoToBottom, Some("!Input && !List")),
         KeyBinding::new("enter", FocusMessageValue, Some("!Input && !List")),
         KeyBinding::new("cmd-f", FocusSearch, None),
         KeyBinding::new("cmd-shift-]", NextConnection, None),
@@ -64,8 +64,8 @@ fn menus() -> Vec<Menu> {
                 MenuItem::action("Consume", ConsumeSelected),
                 MenuItem::action("Stop", StopConsume),
                 MenuItem::Separator,
-                MenuItem::action("Go to newest message", GoToNewest),
-                MenuItem::action("Go to oldest message", GoToOldest),
+                MenuItem::action("Go to the first row", GoToTop),
+                MenuItem::action("Go to the last row", GoToBottom),
                 MenuItem::action("Find in messages", FocusSearch),
                 MenuItem::action("Focus message value", FocusMessageValue),
             ],

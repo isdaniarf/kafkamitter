@@ -114,6 +114,11 @@ impl MessageTableDelegate {
         self.rows = rows;
     }
 
+    /// The number of rows the table shows, after the search term applies.
+    pub fn visible_rows(&self) -> usize {
+        self.rows.len()
+    }
+
     pub fn record_at_row(&self, row: usize) -> Option<&Arc<MessageRecord>> {
         self.store.get(*self.rows.get(row)?)
     }
@@ -230,6 +235,7 @@ pub struct MessagesView {
     split: Entity<ResizableState>,
     settings: Settings,
     open_newest_pending: bool,
+    dev_jump_done: bool,
     session: Option<ConsumeSession>,
     generation: u64,
     placeholder_mode: usize,
@@ -284,6 +290,7 @@ impl MessagesView {
             split,
             settings: Settings::default(),
             open_newest_pending: false,
+            dev_jump_done: false,
             session: None,
             generation: 0,
             placeholder_mode: 0,
@@ -311,11 +318,19 @@ impl MessagesView {
         self.start_with(StartFrom::Newest(newest), Vec::new(), window, cx);
     }
 
-    fn jump_to(&mut self, newest: bool, window: &mut Window, cx: &mut Context<Self>) {
+    /// Selects a row, scrolls it into view, and shows it in the preview.
+    fn jump_to_row(&mut self, row: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(row) = row else {
+            return;
+        };
         let record = self.table.update(cx, |table, cx| {
-            table.delegate_mut().ensure_rows();
-            let row = table.delegate().extreme_row(newest)?;
             let record = table.delegate().record_at_row(row).cloned();
+            crate::startup::trace(&format!(
+                "jump to row {row} of {} (partition {}, offset {})",
+                table.delegate().visible_rows(),
+                record.as_ref().map_or(-1, |r| r.partition),
+                record.as_ref().map_or(-1, |r| r.offset)
+            ));
             table.set_selected_row(row, cx);
             table.scroll_to_row(row, cx);
             record
@@ -326,12 +341,31 @@ impl MessagesView {
         cx.notify();
     }
 
-    pub fn go_to_newest(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.jump_to(true, window, cx);
+    /// Selects the first row the table shows, whatever the sort order is.
+    pub fn go_to_top(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let row = self.table.update(cx, |table, _| {
+            table.delegate_mut().ensure_rows();
+            (table.delegate().visible_rows() > 0).then_some(0)
+        });
+        self.jump_to_row(row, window, cx);
     }
 
-    pub fn go_to_oldest(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.jump_to(false, window, cx);
+    /// Selects the last row the table shows, whatever the sort order is.
+    pub fn go_to_bottom(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let row = self.table.update(cx, |table, _| {
+            table.delegate_mut().ensure_rows();
+            table.delegate().visible_rows().checked_sub(1)
+        });
+        self.jump_to_row(row, window, cx);
+    }
+
+    /// Selects the message with the newest timestamp, for the setting of the same name.
+    pub fn open_newest(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let row = self.table.update(cx, |table, _| {
+            table.delegate_mut().ensure_rows();
+            table.delegate().extreme_row(true)
+        });
+        self.jump_to_row(row, window, cx);
     }
 
     pub fn set_search(&mut self, query: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -533,9 +567,17 @@ impl MessagesView {
                         store.len()
                     ));
                 }
+                if !self.dev_jump_done && !self.assigned.is_empty() && self.eof.len() >= self.assigned.len() {
+                    self.dev_jump_done = true;
+                    match std::env::var("KAFKAMITTER_DEV_JUMP").as_deref() {
+                        Ok("top") => self.go_to_top(window, cx),
+                        Ok("bottom") => self.go_to_bottom(window, cx),
+                        _ => {}
+                    }
+                }
                 if self.open_newest_pending && !self.assigned.is_empty() && self.eof.len() >= self.assigned.len() {
                     self.open_newest_pending = false;
-                    self.go_to_newest(window, cx);
+                    self.open_newest(window, cx);
                     crate::startup::trace("opened newest message");
                 }
             }
