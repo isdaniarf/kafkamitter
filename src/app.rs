@@ -9,6 +9,7 @@ use gpui_component::list::{List, ListEvent, ListState};
 use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_component::notification::Notification;
 use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
+use gpui_component::select::{SelectEvent, SelectState};
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{ActiveTheme, IconName, ThemeMode, Root, Size, Sizable, StyledExt, Theme, TitleBar, WindowExt, h_flex, v_flex};
 
@@ -137,6 +138,7 @@ pub struct KafkamitterApp {
     reselect_after_refresh: Option<String>,
     dev_switch_back: Option<String>,
     dev_retried: bool,
+    theme_preview: Option<Subscription>,
     first_render_traced: bool,
     _subscriptions: Vec<Subscription>,
 }
@@ -178,6 +180,7 @@ impl KafkamitterApp {
             reselect_after_refresh: None,
             dev_switch_back: None,
             dev_retried: false,
+            theme_preview: None,
             first_render_traced: false,
             _subscriptions: subscriptions,
         }
@@ -469,13 +472,36 @@ impl KafkamitterApp {
         .detach();
     }
 
-    /// Puts the window into the appearance the settings ask for.
-    fn apply_theme(&self, window: &mut Window, cx: &mut App) {
-        match self.settings.theme {
+    /// Puts the window into the given appearance without saving anything.
+    pub fn preview_theme(choice: ThemeChoice, window: &mut Window, cx: &mut App) {
+        match choice {
             ThemeChoice::System => Theme::sync_system_appearance(Some(window), cx),
             ThemeChoice::Light => Theme::change(ThemeMode::Light, Some(window), cx),
             ThemeChoice::Dark => Theme::change(ThemeMode::Dark, Some(window), cx),
         }
+    }
+
+    /// Puts the window into the appearance the saved settings ask for.
+    pub fn apply_theme(&self, window: &mut Window, cx: &mut App) {
+        Self::preview_theme(self.settings.theme, window, cx);
+    }
+
+    /// Keeps the dialog's appearance dropdown live while it is open.
+    pub fn watch_theme_choice(
+        &mut self,
+        select: &Entity<SelectState<Vec<SharedString>>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.theme_preview = Some(cx.subscribe_in(
+            select,
+            window,
+            |_, select, _: &SelectEvent<Vec<SharedString>>, window, cx| {
+                let row = select.read(cx).selected_index(cx).map_or(0, |ix| ix.row);
+                let choice = ThemeChoice::ALL[row.min(ThemeChoice::ALL.len() - 1)];
+                Self::preview_theme(choice, window, cx);
+            },
+        ));
     }
 
     pub fn apply_settings(&mut self, settings: Settings, window: &mut Window, cx: &mut Context<Self>) {

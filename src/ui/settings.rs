@@ -30,7 +30,12 @@ fn switch_row(id: &'static str, label: &'static str, value: &Rc<Cell<bool>>) -> 
         .into_any_element()
 }
 
-pub fn open_settings_dialog(app: WeakEntity<KafkamitterApp>, current: Settings, window: &mut Window, cx: &mut App) {
+pub fn open_settings_dialog(
+    app: WeakEntity<KafkamitterApp>,
+    current: Settings,
+    window: &mut Window,
+    cx: &mut Context<KafkamitterApp>,
+) {
     let newest = cx.new(|cx| InputState::new(window, cx).default_value(current.newest_per_partition.to_string()));
     let max_messages = cx.new(|cx| InputState::new(window, cx).default_value(current.max_messages.to_string()));
     let max_megabytes = cx.new(|cx| InputState::new(window, cx).default_value(current.max_megabytes.to_string()));
@@ -49,6 +54,10 @@ pub fn open_settings_dialog(app: WeakEntity<KafkamitterApp>, current: Settings, 
             cx,
         )
     });
+    if let Some(entity) = app.upgrade() {
+        entity.update(cx, |this, cx| this.watch_theme_choice(&theme, window, cx));
+    }
+    let saved = Rc::new(Cell::new(false));
     let auto_consume = Rc::new(Cell::new(current.auto_consume_on_select));
     let open_newest = Rc::new(Cell::new(current.open_newest_message));
     let pretty_json = Rc::new(Cell::new(current.pretty_json_default));
@@ -90,11 +99,20 @@ pub fn open_settings_dialog(app: WeakEntity<KafkamitterApp>, current: Settings, 
         let open_newest = open_newest.clone();
         let pretty_json = pretty_json.clone();
         let app = app.clone();
+        let saved_on_ok = saved.clone();
+        let saved_on_close = saved.clone();
+        let app_on_close = app.clone();
         dialog
             .title("Settings")
             .w(px(480.))
             .child(form)
             .footer(ok_cancel_footer("Save"))
+            .on_close(move |_, window, cx| {
+                // Closing without saving puts the appearance back.
+                if !saved_on_close.get() {
+                    let _ = app_on_close.update(cx, |this, cx| this.apply_theme(window, cx));
+                }
+            })
             .on_ok(move |_, window, cx| {
                 let parse = |input: &Entity<InputState>, label: &str| -> Result<usize, String> {
                     input
@@ -132,6 +150,7 @@ pub fn open_settings_dialog(app: WeakEntity<KafkamitterApp>, current: Settings, 
                         return false;
                     }
                 };
+                saved_on_ok.set(true);
                 let _ = app.update(cx, |app, cx| app.apply_settings(settings, window, cx));
                 true
             })

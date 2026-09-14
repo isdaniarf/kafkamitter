@@ -3,7 +3,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
-use gpui_base::{SelectableText, TextSelectionHandle};
+use gpui_base::SelectableText;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -40,8 +40,6 @@ pub struct MessageTableDelegate {
     pub store: MessageStore,
     columns: Vec<Column>,
     sort: Option<(SharedString, ColumnSort)>,
-    /// One selection document for the whole table, so a drag can cross cells.
-    selection: Option<TextSelectionHandle>,
     /// Display row to store row, after the search term and the sort apply.
     rows: Vec<usize>,
     rows_dirty: bool,
@@ -52,14 +50,13 @@ impl MessageTableDelegate {
         Self {
             store: MessageStore::new(MAX_MESSAGES, MAX_BYTES),
             columns: vec![
-                Column::new("partition", "Part.").width(px(64.)).text_right().sortable(),
+                Column::new("partition", "Part.").width(px(84.)).text_right().sortable(),
                 Column::new("offset", "Offset").width(px(110.)).text_right().sortable(),
                 Column::new("timestamp", "Timestamp").width(px(240.)).sortable(),
                 Column::new("key", "Key").width(px(220.)).sortable(),
                 Column::new("value", "Value").width(px(900.)).sortable(),
             ],
             sort: None,
-            selection: None,
             rows: Vec::new(),
             rows_dirty: true,
         }
@@ -184,21 +181,32 @@ impl TableDelegate for MessageTableDelegate {
         };
         let muted = matches!(col_ix, 0 | 2);
         let order = row_ix * self.columns.len() + col_ix;
-        let selection = self
-            .selection
-            .get_or_insert_with(|| TextSelectionHandle::new("", cx))
-            .clone();
         div()
             .px_2()
             .text_size(cx.theme().mono_font_size)
             .truncate()
             .when(col_ix >= 3, |el| el.font_family(cx.theme().mono_font_family.clone()))
             .when(muted, |el| el.text_color(cx.theme().muted_foreground))
-            .child(
-                SelectableText::with_handle(("cell", order), selection, text)
-                    .document_order(order as u64),
-            )
+            // Each cell owns its selection run. A shared handle would not work,
+            // because the library keeps one run for each handle and every cell
+            // would overwrite the one before it.
+            .child(SelectableText::new(("cell", order), text).document_order(order as u64))
             .into_any_element()
+    }
+
+    /// The header uses the same size as the cells, so the two rows line up.
+    fn render_th(
+        &mut self,
+        col_ix: usize,
+        _window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        div()
+            .size_full()
+            .px_2()
+            .text_size(cx.theme().mono_font_size)
+            .truncate()
+            .child(self.column(col_ix, cx).name.clone())
     }
 
     fn cell_text(&self, row_ix: usize, col_ix: usize, _cx: &App) -> String {

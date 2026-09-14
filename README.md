@@ -37,7 +37,7 @@ Read the consumer groups of a topic, with the committed offset and the lag of ev
 - Resize the columns and drag them into a different order.
 - Inspect one message: value, key, and headers. Show the value as pretty JSON with the original key order and syntax colors.
 - Copy the value, the key, or the headers with one button.
-- Select the text in the message table with the mouse and copy it with Cmd+C. A drag can cross cells and rows.
+- Select the text in the message table with the mouse and copy it with Cmd+C.
 
 **Produce**
 
@@ -84,7 +84,7 @@ Cmd+, opens the settings dialog. The app saves the settings in `~/Library/Applic
 
 | Setting | Default | Effect |
 | --- | --- | --- |
-| Appearance | Follow the system | Use the light or dark setting of macOS, or pin the window to light or dark. |
+| Appearance | Follow the system | Use the light or dark setting of macOS, or pin the window to light or dark. The window changes as soon as you pick one. Cancel puts it back, Save keeps it. |
 | Consume when a topic is selected | on | Start the consumer as soon as you select a topic. |
 | Open the newest message after loading | on | Select and preview the newest message when every partition is caught up. |
 | Show values as pretty JSON | on | The preview starts with the Pretty JSON switch on. |
