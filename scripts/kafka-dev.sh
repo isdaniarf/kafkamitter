@@ -40,8 +40,10 @@ case "${1:-}" in
         ;;
     seed)
         "$KAFKA_BIN/kafka-topics" --bootstrap-server "$BOOTSTRAP" --create --if-not-exists --topic orders --partitions 3
-        seq 1 500 | sed 's/.*/{"id":&,"status":"NEW","customer":{"name":"c&","tier":"gold"},"amount":&.5}/' \
-            | "$KAFKA_BIN/kafka-console-producer" --bootstrap-server "$BOOTSTRAP" --topic orders
+        seq 1 500 \
+            | sed 's/.*/order-&|{"id":&,"status":"NEW","customer":{"name":"c&","tier":"gold"},"amount":&.5}/' \
+            | "$KAFKA_BIN/kafka-console-producer" --bootstrap-server "$BOOTSTRAP" --topic orders \
+                --property parse.key=true --property key.separator='|'
         "$KAFKA_BIN/kafka-console-consumer" --bootstrap-server "$BOOTSTRAP" --topic orders --group billing --from-beginning --max-messages 200 >/dev/null
         "$KAFKA_BIN/kafka-consumer-groups" --bootstrap-server "$BOOTSTRAP" --describe --group billing
         ;;
