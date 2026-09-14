@@ -7,7 +7,7 @@ use gpui_component::switch::Switch;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::{ActiveTheme, IconName, Sizable, h_flex, v_flex};
 
-use crate::model::json::try_pretty;
+use crate::model::json::{looks_like_json, try_pretty};
 use crate::model::message::MessageRecord;
 use crate::ui::messages::format_timestamp;
 
@@ -36,6 +36,7 @@ pub struct MessageDetailView {
     pretty: bool,
     editor: Entity<EditorState>,
     text: String,
+    json: bool,
 }
 
 impl MessageDetailView {
@@ -56,6 +57,7 @@ impl MessageDetailView {
             pretty: true,
             editor,
             text: String::new(),
+            json: true,
         }
     }
 
@@ -64,6 +66,11 @@ impl MessageDetailView {
             self.pretty = pretty;
             self.refresh_text(window, cx);
         }
+    }
+
+    pub fn show_headers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.tab = DetailTab::Headers;
+        self.refresh_text(window, cx);
     }
 
     pub fn focus_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -79,16 +86,16 @@ impl MessageDetailView {
     }
 
     fn refresh_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let text = match &self.record {
-            None => String::new(),
+        let (text, json) = match &self.record {
+            None => (String::new(), false),
             Some(record) => match self.tab {
                 DetailTab::Value => render_bytes(record.value.as_deref(), self.pretty),
                 DetailTab::Key => render_bytes(record.key.as_deref(), self.pretty),
                 DetailTab::Headers => {
                     if record.headers.is_empty() {
-                        String::from("<no headers>")
+                        (String::from("<no headers>"), false)
                     } else {
-                        record
+                        let text = record
                             .headers
                             .iter()
                             .map(|(k, v)| {
@@ -98,13 +105,21 @@ impl MessageDetailView {
                                 )
                             })
                             .collect::<Vec<_>>()
-                            .join("\n")
+                            .join("\n");
+                        (text, false)
                     }
                 }
             },
         };
         self.text = text.clone();
-        self.editor.update(cx, |editor, cx| editor.set_value(text, window, cx));
+        let changed = self.json != json;
+        self.json = json;
+        self.editor.update(cx, |editor, cx| {
+            if changed {
+                editor.set_highlighter(if json { "json" } else { "text" }, cx);
+            }
+            editor.set_value(text, window, cx);
+        });
         cx.notify();
     }
 
@@ -113,17 +128,17 @@ impl MessageDetailView {
     }
 }
 
-fn render_bytes(bytes: Option<&[u8]>, pretty: bool) -> String {
+fn render_bytes(bytes: Option<&[u8]>, pretty: bool) -> (String, bool) {
     match bytes {
-        None => String::from("<null>"),
-        Some([]) => String::from("<empty>"),
+        None => (String::from("<null>"), false),
+        Some([]) => (String::from("<empty>"), false),
         Some(bytes) => {
             if pretty {
                 if let Some(text) = try_pretty(bytes) {
-                    return text;
+                    return (text, true);
                 }
             }
-            String::from_utf8_lossy(bytes).into_owned()
+            (String::from_utf8_lossy(bytes).into_owned(), looks_like_json(bytes))
         }
     }
 }
@@ -201,5 +216,37 @@ impl Render for MessageDetailView {
                     .child(Editor::new(&self.editor).readonly(true).h(relative(1.))),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::render_bytes;
+
+    #[test]
+    fn json_values_ask_for_the_json_highlighter() {
+        let (text, json) = render_bytes(Some(br#"{"id":1}"#), true);
+        assert_eq!(text, "{\n  \"id\": 1\n}");
+        assert!(json);
+    }
+
+    #[test]
+    fn plain_values_ask_for_no_highlighter() {
+        let (text, json) = render_bytes(Some(b"27a8bf96-332e-4644"), true);
+        assert_eq!(text, "27a8bf96-332e-4644");
+        assert!(!json, "a header value must not use the json highlighter");
+    }
+
+    #[test]
+    fn a_missing_or_empty_value_asks_for_no_highlighter() {
+        assert_eq!(render_bytes(None, true), (String::from("<null>"), false));
+        assert_eq!(render_bytes(Some(&[]), true), (String::from("<empty>"), false));
+    }
+
+    #[test]
+    fn raw_json_keeps_the_json_highlighter() {
+        let (text, json) = render_bytes(Some(br#"{"id":1}"#), false);
+        assert_eq!(text, r#"{"id":1}"#);
+        assert!(json);
     }
 }
