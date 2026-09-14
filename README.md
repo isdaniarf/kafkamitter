@@ -53,7 +53,7 @@ Read the consumer groups of a topic, with the committed offset and the lag of ev
 **Layout**
 
 - Drag the divider between the sidebar and the main area, and the divider above the message preview.
-- The app follows the light or dark appearance of macOS.
+- The app follows the light or dark appearance of macOS. Settings can pin it to light or dark instead.
 
 ## Key bindings
 
@@ -84,6 +84,7 @@ Cmd+, opens the settings dialog. The app saves the settings in `~/Library/Applic
 
 | Setting | Default | Effect |
 | --- | --- | --- |
+| Appearance | Follow the system | Use the light or dark setting of macOS, or pin the window to light or dark. |
 | Consume when a topic is selected | on | Start the consumer as soon as you select a topic. |
 | Open the newest message after loading | on | Select and preview the newest message when every partition is caught up. |
 | Show values as pretty JSON | on | The preview starts with the Pretty JSON switch on. |

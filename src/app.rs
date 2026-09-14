@@ -10,7 +10,7 @@ use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_component::notification::Notification;
 use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
 use gpui_component::tab::{Tab, TabBar};
-use gpui_component::{ActiveTheme, IconName, Root, Size, Sizable, StyledExt, Theme, TitleBar, WindowExt, h_flex, v_flex};
+use gpui_component::{ActiveTheme, IconName, ThemeMode, Root, Size, Sizable, StyledExt, Theme, TitleBar, WindowExt, h_flex, v_flex};
 
 use crate::kafka::KafkaService;
 use crate::kafka::metadata::{ClusterInfo, TopicInfo};
@@ -23,7 +23,7 @@ use crate::ui::produce::ProduceView;
 use crate::ui::consumers::ConsumersView;
 use crate::ui::topics::{CreateTopic, DeleteTopic, open_create_topic_dialog};
 use crate::ui::settings::open_settings_dialog;
-use crate::model::settings::{Settings, load_settings, save_settings, settings_path};
+use crate::model::settings::{Settings, ThemeChoice, load_settings, save_settings, settings_path};
 use gpui_component::menu::DropdownMenu as _;
 use crate::kafka::admin::NewTopicSpec;
 use crate::kafka::import::prepare_import;
@@ -150,8 +150,10 @@ impl KafkamitterApp {
         window.focus(&focus_handle, cx);
         let subscriptions = vec![
             cx.subscribe_in(&topics, window, Self::on_topic_list_event),
-            cx.observe_window_appearance(window, |_, window, cx| {
-                Theme::sync_system_appearance(Some(window), cx);
+            cx.observe_window_appearance(window, |this, window, cx| {
+                if this.settings.theme == ThemeChoice::System {
+                    Theme::sync_system_appearance(Some(window), cx);
+                }
             }),
         ];
         Theme::sync_system_appearance(Some(window), cx);
@@ -345,6 +347,7 @@ impl KafkamitterApp {
         }
         self.migrate_legacy_passwords(window, cx);
         self.settings = load_settings(&settings_path());
+        self.apply_theme(window, cx);
         let settings = self.settings.clone();
         self.messages().update(cx, |view, cx| view.apply_settings(&settings, window, cx));
         if let Ok(bootstrap) = std::env::var("KAFKAMITTER_DEV_BOOTSTRAP") {
@@ -466,11 +469,21 @@ impl KafkamitterApp {
         .detach();
     }
 
+    /// Puts the window into the appearance the settings ask for.
+    fn apply_theme(&self, window: &mut Window, cx: &mut App) {
+        match self.settings.theme {
+            ThemeChoice::System => Theme::sync_system_appearance(Some(window), cx),
+            ThemeChoice::Light => Theme::change(ThemeMode::Light, Some(window), cx),
+            ThemeChoice::Dark => Theme::change(ThemeMode::Dark, Some(window), cx),
+        }
+    }
+
     pub fn apply_settings(&mut self, settings: Settings, window: &mut Window, cx: &mut Context<Self>) {
         if let Err(err) = save_settings(&settings_path(), &settings) {
             window.push_notification(Notification::error(format!("Cannot save settings: {err}")), cx);
         }
         self.settings = settings.clone();
+        self.apply_theme(window, cx);
         let views: Vec<_> = self.sessions.iter().map(|s| s.messages.clone()).collect();
         for view in views {
             view.update(cx, |view, cx| view.apply_settings(&settings, window, cx));

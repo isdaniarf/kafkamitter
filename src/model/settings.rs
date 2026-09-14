@@ -4,9 +4,33 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::profile::app_support_dir;
 
+/// Which appearance the window uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeChoice {
+    /// Follow the light or dark setting of macOS.
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl ThemeChoice {
+    pub const ALL: [ThemeChoice; 3] = [ThemeChoice::System, ThemeChoice::Light, ThemeChoice::Dark];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ThemeChoice::System => "Follow the system",
+            ThemeChoice::Light => "Light",
+            ThemeChoice::Dark => "Dark",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    pub theme: ThemeChoice,
     pub auto_consume_on_select: bool,
     pub newest_per_partition: i64,
     pub open_newest_message: bool,
@@ -18,6 +42,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            theme: ThemeChoice::System,
             auto_consume_on_select: true,
             newest_per_partition: 200,
             open_newest_message: true,
@@ -66,6 +91,7 @@ mod tests {
         let path = dir.join("settings.json");
         assert_eq!(load_settings(&path), Settings::default());
         let custom = Settings {
+            theme: ThemeChoice::Dark,
             newest_per_partition: 50,
             max_megabytes: 64,
             ..Settings::default()
@@ -76,7 +102,10 @@ mod tests {
         let partial = load_settings(&path);
         assert!(!partial.auto_consume_on_select);
         assert_eq!(partial.newest_per_partition, 200);
+        assert_eq!(partial.theme, ThemeChoice::System, "a missing theme follows the system");
         assert_eq!(Settings::default().max_bytes(), 256 * 1024 * 1024);
+        std::fs::write(&path, br#"{"theme":"dark"}"#).unwrap();
+        assert_eq!(load_settings(&path).theme, ThemeChoice::Dark);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
