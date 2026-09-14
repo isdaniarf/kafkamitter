@@ -1,0 +1,42 @@
+[package]
+name = "kafkamitter"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "A fast, small Kafka GUI client for macOS"
+license = "MIT"
+publish = false
+
+[dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.3" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.3", features = ["font-kit"] }
+gpui-base = "=0.6.1"
+gpui-component = "=0.6.1"
+gpui-kit-assets = "=0.6.1"
+rdkafka-sys = "4.10"
+rdkafka = { version = "0.39", default-features = false, features = ["cmake-build", "ssl-vendored", "libz", "zstd", "naive-runtime"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+rustls-native-certs = "0.8"
+security-framework = "3"
+base64 = "0.22"
+smol = "2"
+futures = "0.3"
+anyhow = "1"
+chrono = "0.4"
+log = "0.4"
+memchr = "2"
+
+[features]
+default = ["runtime-shaders"]
+runtime-shaders = ["gpui_platform/runtime_shaders"]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev.package."*"]
+opt-level = 2

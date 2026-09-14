@@ -1,0 +1,224 @@
+# Kafkamitter
+
+Kafkamitter is a native Kafka client for macOS. It is written in Rust with Zed's GPUI framework and librdkafka. The app starts in about 0.2 seconds, keeps memory bounded, and ships as one binary of 18 MB.
+
+## Features
+
+**Connections**
+
+- Connect with PLAINTEXT or SASL_SSL. The SASL mechanisms are PLAIN, SCRAM-SHA-256, and SCRAM-SHA-512.
+- Import a Kafka client properties file. The app reads a JKS truststore and converts it to PEM.
+- Edit, rename, disconnect, or remove a connection from the menu button on each row.
+- Each connection shows its state as a colored dot, with the broker and topic count.
+
+**Topics**
+
+- Browse and filter the topics of a cluster. Show or hide internal topics.
+- Create a topic with a partition count, a replication factor, and an optional retention.
+- Delete a topic from its right-click menu. The app asks you to confirm.
+
+**Messages**
+
+- Select a topic and the newest 200 messages of each partition load at once. The newest message opens in the preview.
+- Other start points: latest, beginning, a given offset, or a timestamp. You can limit the consumer to one partition.
+- Search the messages. The term matches the value, the key, and the header names and values. The table then shows only the messages that hold it.
+- Sort the table by any column. The first click sorts downward, the next click reverses it, and a third click returns to arrival order.
+- Resize the columns and drag them into a different order.
+- Inspect one message: value, key, and headers. Show the value as pretty JSON with the original key order and syntax colors.
+- Copy the value, the key, or the headers with one button.
+- Select the text in the message table with the mouse and copy it with Cmd+C. A drag can cross cells and rows.
+
+**Produce**
+
+- Send a message with a key, a value, headers, and an optional partition. The app reports the partition and the offset.
+
+**Consumer groups**
+
+- List the groups that consume the selected topic, with their members.
+- For one group, show the committed offset, the low and high watermarks, and the lag for each partition.
+- A flag marks a commit that fell behind the low watermark or that points past the high watermark.
+- An optional scan finds groups that hold committed offsets but have no live member.
+
+**Layout**
+
+- Drag the divider between the sidebar and the main area, and the divider above the message preview.
+- The app follows the light or dark appearance of macOS.
+
+## Key bindings
+
+| Keys | Action |
+| --- | --- |
+| Cmd+, | Open Settings |
+| Cmd+1 to Cmd+9 | Switch to connection 1 to 9 |
+| Cmd+Shift+] | Next connection |
+| Cmd+Shift+[ | Previous connection |
+| Cmd+E | Edit the active connection |
+| Cmd+R | Consume the selected topic with the default start mode |
+| Cmd+. | Stop the consumer |
+| Cmd+Down | Go to the newest message and open it |
+| Cmd+Up | Go to the oldest message and open it |
+| Cmd+F | Focus the message search box |
+| Return | Focus the message value in the preview |
+| Cmd+Q | Quit |
+
+The Connection and Topic menus in the menu bar list the same actions. Return and the Cmd+arrow keys stay inactive while a text field or the topic list has focus.
+
+## Settings
+
+Cmd+, opens the settings dialog. The app saves the settings in `~/Library/Application Support/kafkamitter/settings.json`.
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| Consume when a topic is selected | on | Start the consumer as soon as you select a topic. |
+| Open the newest message after loading | on | Select and preview the newest message when every partition is caught up. |
+| Show values as pretty JSON | on | The preview starts with the Pretty JSON switch on. |
+| Newest messages per partition | 200 | How many messages the default start mode reads from each partition. |
+| Maximum messages kept | 10 000 | The table drops the oldest message above this count. |
+| Maximum memory for messages | 256 MB | The table drops the oldest message above this size. |
+
+## What the app remembers per connection
+
+Each connection keeps the topic you had open and the tab you were on. Switch to another connection and back, and the app returns you to the same place. The topic then loads its newest messages again. This memory lasts for the session and is not written to disk.
+
+## Where the app stores credentials
+
+The app keeps every connection, including the SASL password, in `~/Library/Application Support/kafkamitter/connections.json`. The app writes that file with permission `0600`, so only your account can read it. The password is in clear text, exactly as in a Kafka client properties file. Do not copy that file to a shared machine and do not commit it.
+
+The app does not use the macOS Keychain, so it never asks for your login password. An older version stored passwords in the Keychain. On the first start, the app moves those passwords into the connections file and deletes the Keychain items. That migration asks for Keychain access once for each connection.
+
+## Import a Kafka properties file
+
+Kafkamitter reads the client properties files that the Kafka CLI, Offset Explorer, and Aiven use. It supports these keys:
+
+- `bootstrap.servers`
+- `security.protocol`, with the value `PLAINTEXT` or `SASL_SSL`
+- `sasl.mechanism`
+- `sasl.jaas.config`, or `sasl.username` and `sasl.password`
+- `ssl.ca.location`, for a PEM file
+- `ssl.truststore.location`, for a JKS file
+
+The app converts a JKS truststore to a PEM file in `~/Library/Application Support/kafkamitter/ca/`. It ignores `ssl.keystore.location`, because SASL does not need a client certificate.
+
+In the app, the folder button next to Connections opens a file picker for the import.
+
+## Command line
+
+```sh
+kafkamitter --check ~/kafka/staging.properties
+```
+
+`--check` reads the file, connects, and prints the broker, topic, and group count. It saves nothing.
+
+```sh
+kafkamitter --import ~/kafka/staging.properties
+```
+
+`--import` saves the file as a connection, with its password. A connection with the same name is replaced.
+
+## Requirements
+
+- macOS 13 or later on Apple Silicon or Intel.
+- Rust stable 1.85 or later. The crate uses edition 2024.
+- Xcode command line tools and cmake. The first build compiles librdkafka and OpenSSL from source, which takes several minutes.
+
+The default build compiles the Metal shaders at runtime, so the Xcode Metal Toolchain is not needed. If you install that toolchain, build with `--no-default-features` to embed precompiled shaders instead.
+
+## Build and run
+
+```sh
+cargo run --release
+```
+
+Create an app bundle in `dist/Kafkamitter.app`:
+
+```sh
+scripts/bundle.sh
+```
+
+The script signs the bundle with an ad-hoc signature. It does not notarize the app.
+
+## Local broker for development
+
+The helper script uses the Homebrew Kafka installation in KRaft mode.
+
+```sh
+scripts/kafka-dev.sh start
+scripts/kafka-dev.sh seed
+scripts/kafka-dev.sh status
+scripts/kafka-dev.sh stop
+```
+
+`seed` creates the topic `orders` with 500 JSON messages, and a consumer group `billing` that has read 200 of them.
+
+## Tests
+
+The unit tests run without a broker:
+
+```sh
+cargo test
+```
+
+The integration test in `tests/broker.rs` needs a broker. It creates a temporary topic, produces, consumes from the beginning and from the newest offsets, commits a consumer group, checks the offsets and the lag, and deletes the topic.
+
+```sh
+KAFKAMITTER_TEST_BOOTSTRAP=localhost:9092 cargo test --test broker -- --test-threads=1
+```
+
+## Developer options
+
+These environment variables drive the app for measurements and automated checks.
+
+| Variable | Effect |
+| --- | --- |
+| `KAFKAMITTER_TRACE_STARTUP=1` | Print elapsed milliseconds for startup, connection, consume, and view events to stderr. |
+| `KAFKAMITTER_DEV_QUIET=1` | Do not bring the window to the front at startup. |
+| `KAFKAMITTER_DEV_BOOTSTRAP=host:port` | Add a temporary PLAINTEXT connection named `dev` and connect at startup. The app does not save it. |
+| `KAFKAMITTER_DEV_IMPORT=file.properties` | Import this file into memory only and connect at startup. The app does not save it. |
+| `KAFKAMITTER_DEV_CONNECT=name` | Connect to the saved connection with this name at startup. |
+| `KAFKAMITTER_DEV_TOPIC=name` | Select this topic after the connection succeeds. |
+| `KAFKAMITTER_DEV_CONSUME=1` | Start the consumer with the default start mode. This applies only when the auto-consume setting is off. |
+| `KAFKAMITTER_DEV_TAB=name` | Open the tab `messages`, `produce`, or `consumers` after the topic is selected. |
+| `KAFKAMITTER_DEV_SELECT_GROUP=1` | Load the offsets of the first consumer group. |
+| `KAFKAMITTER_DEV_PRODUCE=1` | Send one test message to the selected topic. |
+| `KAFKAMITTER_DEV_SEARCH=term` | Put this term in the message search box after the topic is selected. |
+| `KAFKAMITTER_DEV_WINDOW=WxH` | Open the window at this size, to check the layout at a narrow width. |
+| `KAFKAMITTER_DEV_EDIT=name` | Open the edit dialog for the saved connection with this name. |
+| `KAFKAMITTER_DEV_SETTINGS=1` | Open the settings dialog at startup. |
+| `KAFKAMITTER_DEV_RENAME=old=new` | Rename a saved connection through the dialog form code and save it. |
+| `KAFKAMITTER_DEV_SWITCH=name` | Switch to this connection and back, to check that the app remembers the view. |
+
+## Measurements
+
+Measured on an Apple M-series Mac with the release build and the local Homebrew broker. The numbers come from `KAFKAMITTER_TRACE_STARTUP=1`.
+
+| Metric | Value |
+| --- | --- |
+| Release binary | 18.3 MB |
+| App bundle | 18 MB |
+| Time to first render | 146 to 201 ms |
+| Time to cluster metadata after process start | 244 to 263 ms |
+| Consume 1 000 000 messages of 512 bytes | 2.9 to 11.9 s, so 85 000 to 350 000 messages per second |
+| Resident memory during that consume | 112 to 120 MB, flat after the message cap |
+| Apply a search term to a full table | 5 ms for 10 000 messages and 17 MB |
+
+The consume time depends on how much of the topic the broker serves from its page cache. The slower figure is the steady state after several runs.
+
+## Design notes
+
+- The user interface runs on the main thread. Each connection owns one worker thread that holds the librdkafka clients. The interface sends a command and awaits a reply, so a slow broker never blocks the window.
+- Each consume session owns one more thread. That thread polls the consumer and sends batches over a bounded channel. A full channel pauses the fetch, so the interface never falls behind.
+- The message table keeps at most 10 000 messages or 256 MB. The oldest messages leave first. The table builds the preview text on the poll thread, so a cell never scans a message body.
+- The message toolbar holds one row at every width. The controls keep their size, the search box takes the space that is left, and the status text shortens last.
+- The search term matches bytes, so it never decodes a message. It folds ASCII letters, which makes it case-insensitive without an allocation. The table keeps one match flag for each message, tests only the new messages of each batch, and rebuilds the visible rows at most once for each frame.
+- The message viewer never joins a consumer group and never commits an offset. It assigns partitions directly.
+- The app reads the offsets of a group with a `ListConsumerGroupOffsets` request. The optional scan for inactive groups sends 32 of those requests at a time over one connection.
+- Active consumer groups come from the group list and from the partition assignment of each member. The app decodes that assignment itself.
+
+## Limits in this version
+
+- No Schema Registry, and no Avro or Protobuf decoding.
+- The app cannot reset or commit a consumer group offset.
+- No mTLS client certificates and no Kerberos.
+- The app does not convert a PKCS12 truststore. Export its CA to PEM and set `ssl.ca.location`.
+- The consumer group list uses the classic group protocol. A group that uses the KIP-848 protocol appears through the inactive scan, without member details.
+- The bundle carries an ad-hoc signature and is not notarized. Another Mac needs your approval to open it.

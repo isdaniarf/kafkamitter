@@ -1,0 +1,9 @@
+pub mod connections;
+pub mod consumers;
+pub mod dialog_footer;
+pub mod json_highlight;
+pub mod message_detail;
+pub mod messages;
+pub mod produce;
+pub mod settings;
+pub mod topics;
