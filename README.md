@@ -122,6 +122,19 @@ Kafkamitter reads the client properties files that the Kafka CLI, Offset Explore
 
 The app converts a JKS truststore to a PEM file in `~/Library/Application Support/kafkamitter/ca/`. It ignores `ssl.keystore.location`, because SASL does not need a client certificate.
 
+Two example files sit in `examples/`:
+
+| File | Shows |
+| --- | --- |
+| `examples/plaintext.properties` | A local broker with no authentication. |
+| `examples/sasl-ssl.properties` | A managed cluster with SCRAM over TLS and a Java truststore. Replace every value with your own. |
+
+Try the first one against the local broker from `scripts/kafka-dev.sh`:
+
+```sh
+kafkamitter --check examples/plaintext.properties
+```
+
 In the app, the folder button next to Connections opens a file picker for the import.
 
 ## Command line

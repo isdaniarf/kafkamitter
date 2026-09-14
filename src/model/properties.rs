@@ -221,6 +221,29 @@ mod tests {
     }
 
     #[test]
+    fn the_example_files_in_the_repository_stay_valid() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+
+        let text = std::fs::read_to_string(root.join("examples/plaintext.properties")).unwrap();
+        let local = import_properties(&text, "plaintext").unwrap();
+        assert_eq!(local.profile.bootstrap_servers, "localhost:9092");
+        assert_eq!(local.profile.security, Security::Plaintext);
+        assert_eq!(local.password, None);
+
+        let text = std::fs::read_to_string(root.join("examples/sasl-ssl.properties")).unwrap();
+        let cloud = import_properties(&text, "sasl-ssl").unwrap();
+        assert_eq!(
+            cloud.profile.security,
+            Security::SaslSsl {
+                mechanism: SaslMechanism::ScramSha512,
+                username: "my-user".into()
+            }
+        );
+        assert_eq!(cloud.password.as_deref(), Some("my-password"));
+        assert!(matches!(cloud.trust_store, Some(TrustStore::Jks { .. })));
+    }
+
+    #[test]
     fn rejects_unsupported_protocols_and_mechanisms() {
         let err = import_properties("bootstrap.servers=b:1\nsecurity.protocol=SASL_PLAINTEXT\nsasl.mechanism=PLAIN\n", "x").unwrap_err();
         assert!(err.contains("SASL_PLAINTEXT"));
