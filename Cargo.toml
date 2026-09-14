@@ -27,6 +27,11 @@ chrono = "0.4"
 log = "0.4"
 memchr = "2"
 
+[dev-dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.3", features = ["test-support"] }
+gpui-base = { version = "=0.6.1", features = ["test-support"] }
+gpui-component = { version = "=0.6.1", features = ["test-support"] }
+
 [features]
 default = ["runtime-shaders"]
 runtime-shaders = ["gpui_platform/runtime_shaders"]

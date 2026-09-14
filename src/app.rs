@@ -137,9 +137,66 @@ pub struct KafkamitterApp {
     reselect_after_refresh: Option<String>,
     dev_switch_back: Option<String>,
     dev_retried: bool,
+    dev_dragged: bool,
     theme_preview: Option<Subscription>,
     first_render_traced: bool,
     _subscriptions: Vec<Subscription>,
+}
+
+
+fn dev_scroll(this: &WeakEntity<KafkamitterApp>, cx: &mut AsyncWindowContext) -> f32 {
+    cx.update(|_, cx| {
+        this.upgrade()
+            .map_or(0., |app| app.read(cx).messages().read(cx).dev_scroll_offset(cx))
+    })
+    .unwrap_or(0.)
+}
+
+async fn drag_once(cx: &mut AsyncWindowContext, x0: f32, x1: f32, y: f32) -> String {
+    let move_to = |cx: &mut AsyncWindowContext, x: f32, pressed: Option<MouseButton>| {
+        let _ = cx.update(|window, cx| {
+            window.dispatch_event(
+                PlatformInput::MouseMove(MouseMoveEvent {
+                    position: point(px(x), px(y)),
+                    pressed_button: pressed,
+                    modifiers: Modifiers::default(),
+                }),
+                cx,
+            );
+        });
+    };
+    move_to(cx, x0, None);
+    smol::Timer::after(std::time::Duration::from_millis(24)).await;
+    let _ = cx.update(|window, cx| {
+        window.dispatch_event(
+            PlatformInput::MouseDown(MouseDownEvent {
+                button: MouseButton::Left,
+                position: point(px(x0), px(y)),
+                modifiers: Modifiers::default(),
+                click_count: 1,
+                first_mouse: false,
+            }),
+            cx,
+        );
+    });
+    for tick in 1..=6u32 {
+        smol::Timer::after(std::time::Duration::from_millis(24)).await;
+        move_to(cx, x0 + (x1 - x0) * tick as f32 / 6., Some(MouseButton::Left));
+    }
+    smol::Timer::after(std::time::Duration::from_millis(24)).await;
+    cx.update(|window, cx| {
+        window.dispatch_event(
+            PlatformInput::MouseUp(MouseUpEvent {
+                button: MouseButton::Left,
+                position: point(px(x1), px(y)),
+                modifiers: Modifiers::default(),
+                click_count: 1,
+            }),
+            cx,
+        );
+        gpui_base::TextSelection::selected_text(window, cx)
+    })
+    .unwrap_or_default()
 }
 
 impl KafkamitterApp {
@@ -179,6 +236,7 @@ impl KafkamitterApp {
             reselect_after_refresh: None,
             dev_switch_back: None,
             dev_retried: false,
+            dev_dragged: false,
             theme_preview: None,
             first_render_traced: false,
             _subscriptions: subscriptions,
@@ -827,6 +885,7 @@ impl KafkamitterApp {
                         self.reconnect(id.clone(), window, cx);
                         return;
                     }
+                    self.run_dev_drag_test(window, cx);
                     self.run_dev_tab_test(window, cx);
                     self.run_dev_switch_test(&id, window, cx);
                 }
@@ -845,6 +904,37 @@ impl KafkamitterApp {
             }
         }
         cx.notify();
+    }
+
+    /// Injects a drag into the real window and reports what the selection holds
+    /// and whether the message list stayed still.
+    fn run_dev_drag_test(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if std::env::var_os("KAFKAMITTER_DEV_DRAGTEST").is_none() || self.dev_dragged {
+            return;
+        }
+        self.dev_dragged = true;
+        let number = |name: &str| std::env::var(name).ok().and_then(|value| value.parse::<f32>().ok());
+        let x0 = number("KAFKAMITTER_DEV_DRAG_X0").unwrap_or(420.);
+        let x1 = number("KAFKAMITTER_DEV_DRAG_X1").unwrap_or(900.);
+        let fixed_y = number("KAFKAMITTER_DEV_DRAG_Y");
+        cx.spawn_in(window, async move |this, cx| {
+            smol::Timer::after(std::time::Duration::from_millis(2500)).await;
+            for step in 0..60u32 {
+                let y = fixed_y.unwrap_or(110. + step as f32 * 8.);
+                let before = dev_scroll(&this, cx);
+                let text = drag_once(cx, x0, x1, y).await;
+                if !text.trim().is_empty() || fixed_y.is_some() {
+                    smol::Timer::after(std::time::Duration::from_millis(600)).await;
+                    let after = dev_scroll(&this, cx);
+                    crate::startup::trace(&format!(
+                        "dragtest: y={y} scroll {before:.1} -> {after:.1} text {text:?}"
+                    ));
+                    return;
+                }
+            }
+            crate::startup::trace("dragtest: no selection at any row");
+        })
+        .detach();
     }
 
     /// Switches to another connection and back, to prove the view is remembered.
@@ -1624,5 +1714,66 @@ impl Render for KafkamitterApp {
             .children(sheet_layer)
             .children(dialog_layer)
             .children(notification_layer)
+    }
+}
+
+#[cfg(test)]
+mod selection_app_tests {
+    use std::prelude::v1::test;
+
+    use super::*;
+    use crate::kafka::metadata::PartitionInfo;
+    use crate::ui::messages::selection_tests::{drag_scan_in, drag_with_redraw, sample_records};
+    use gpui_component::Root;
+
+    fn topic() -> Arc<TopicInfo> {
+        Arc::new(TopicInfo {
+            name: String::from("orders"),
+            partitions: vec![PartitionInfo {
+                id: 0,
+                leader: 1,
+                replicas: vec![1],
+                isr: vec![1],
+            }],
+        })
+    }
+
+    #[gpui::test]
+    fn message_cells_in_the_app_report_a_selection(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let app: Rc<std::cell::RefCell<Option<Entity<KafkamitterApp>>>> = Rc::default();
+        let captured = app.clone();
+        let (_, cx) = cx.add_window_view(move |window, cx| {
+            let view = cx.new(|cx| KafkamitterApp::new(window, cx));
+            *captured.borrow_mut() = Some(view.clone());
+            Root::new(view, window, cx)
+        });
+        let app = app.borrow().clone().expect("the app view exists");
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.session_mut().topic = Some(topic());
+                cx.notify();
+            });
+            let messages = app.read(cx).messages();
+            messages.update(cx, |view, cx| view.push_for_test(sample_records(), cx));
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let found = drag_scan_in(cx, 360.0, 900.0, 60.0);
+        assert!(!found.is_empty(), "a message cell in the app must report a selection");
+
+        let rows: Vec<f32> = found.iter().map(|(y, _)| *y).collect();
+        let mut live = Vec::new();
+        for y in rows {
+            let text = drag_with_redraw(cx, 360.0, 900.0, y);
+            if !text.trim().is_empty() {
+                live.push((y, text));
+            }
+        }
+        assert!(
+            !live.is_empty(),
+            "a drag with a repaint between each move must report a selection"
+        );
     }
 }

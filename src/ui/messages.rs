@@ -1,9 +1,10 @@
 use std::collections::BTreeSet;
+use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
-use gpui_base::SelectableText;
+use gpui_base::{SelectableText, TextSelection};
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -274,6 +275,51 @@ impl TableDelegate for MessageTableDelegate {
     }
 }
 
+#[derive(Default)]
+pub struct ScrollGuard {
+    held: Cell<bool>,
+    quiet_until: Cell<Option<std::time::Instant>>,
+}
+
+impl ScrollGuard {
+    const TAIL: std::time::Duration = std::time::Duration::from_millis(250);
+
+    fn holds(&self) -> bool {
+        self.held.get() || self.quiet_until.get().is_some_and(|end| std::time::Instant::now() < end)
+    }
+}
+
+fn hold_scroll_while_dragging(guard: Rc<ScrollGuard>) -> impl IntoElement {
+    canvas(
+        |_, _, _| (),
+        move |_, _, window: &mut Window, _| {
+            let down = guard.clone();
+            window.on_mouse_event(move |event: &MouseDownEvent, phase, _, _| {
+                if phase.capture() && event.button == MouseButton::Left {
+                    down.quiet_until.set(None);
+                    down.held.set(true);
+                }
+            });
+            let up = guard.clone();
+            window.on_mouse_event(move |event: &MouseUpEvent, phase, window: &mut Window, cx| {
+                if phase.capture() && event.button == MouseButton::Left && up.held.get() {
+                    up.held.set(false);
+                    up.quiet_until.set(Some(std::time::Instant::now() + ScrollGuard::TAIL));
+                    TextSelection::end(window, cx);
+                }
+            });
+            let held = guard.clone();
+            window.on_mouse_event(move |_: &ScrollWheelEvent, phase, _, cx| {
+                if phase.capture() && held.holds() {
+                    cx.stop_propagation();
+                }
+            });
+        },
+    )
+    .absolute()
+    .size_0()
+}
+
 pub struct MessagesView {
     worker: Option<Rc<WorkerHandle>>,
     topic: Option<Arc<TopicInfo>>,
@@ -284,6 +330,7 @@ pub struct MessagesView {
     search: Entity<InputState>,
     detail: Entity<MessageDetailView>,
     split: Entity<ResizableState>,
+    scroll_guard: Rc<ScrollGuard>,
     settings: Settings,
     open_newest_pending: bool,
     dev_jump_done: bool,
@@ -339,6 +386,7 @@ impl MessagesView {
             search,
             detail,
             split,
+            scroll_guard: Rc::default(),
             settings: Settings::default(),
             open_newest_pending: false,
             dev_jump_done: false,
@@ -351,6 +399,18 @@ impl MessagesView {
             last_error: None,
             _subscriptions: subscriptions,
         }
+    }
+
+    pub fn dev_scroll_offset(&self, cx: &App) -> f32 {
+        gpui_base::ScrollbarHandle::offset(&self.table.read(cx).vertical_scroll_handle).y.into()
+    }
+
+    #[cfg(test)]
+    pub fn push_for_test(&self, batch: Vec<MessageRecord>, cx: &mut App) {
+        self.table.update(cx, |table, cx| {
+            table.delegate_mut().push_batch(batch);
+            cx.notify();
+        });
     }
 
     pub fn apply_settings(&mut self, settings: &Settings, window: &mut Window, cx: &mut Context<Self>) {
@@ -417,6 +477,9 @@ impl MessagesView {
             table.delegate().extreme_row(true)
         });
         self.jump_to_row(row, window, cx);
+        if std::env::var_os("KAFKAMITTER_DEV_HEADERS").is_some() {
+            self.detail.update(cx, |detail, cx| detail.show_headers(window, cx));
+        }
     }
 
     pub fn set_search(&mut self, query: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -806,6 +869,8 @@ impl Render for MessagesView {
                             resizable_panel().child(
                                 div()
                                     .size_full()
+                                    .relative()
+                                    .child(hold_scroll_while_dragging(self.scroll_guard.clone()))
                                     .child(DataTable::new(&self.table).stripe(true).with_size(Size::Small)),
                             ),
                         )
@@ -823,5 +888,224 @@ impl Render for MessagesView {
                         ),
                 ),
             )
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod selection_tests {
+    use std::prelude::v1::test;
+
+    use super::*;
+    use gpui_base::{TextSelection, TextSelectionLayer};
+
+    struct TableTestView {
+        table: Entity<TableState<MessageTableDelegate>>,
+    }
+
+    impl Render for TableTestView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .child(TextSelectionLayer)
+                .child(div().size_full().child(DataTable::new(&self.table).stripe(true).with_size(Size::Small)))
+        }
+    }
+
+    struct ResizableTestView {
+        table: Entity<TableState<MessageTableDelegate>>,
+        split: Entity<ResizableState>,
+    }
+
+    impl Render for ResizableTestView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(TextSelectionLayer).child(
+                div().flex_1().min_h_0().w_full().child(
+                    v_resizable("messages-split")
+                        .with_state(&self.split)
+                        .child(resizable_panel().child(
+                            div()
+                                .size_full()
+                                .child(DataTable::new(&self.table).stripe(true).with_size(Size::Small)),
+                        ))
+                        .child(
+                            resizable_panel()
+                                .size(px(300.))
+                                .size_range(px(120.)..px(1000.))
+                                .child(div().size_full().child("detail")),
+                        ),
+                ),
+            )
+        }
+    }
+
+    struct PlainTestView;
+
+    impl Render for PlainTestView {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .child(TextSelectionLayer)
+                .child(
+                    div()
+                        .w(px(400.))
+                        .h(px(30.))
+                        .child(SelectableText::new("plain-cell", "0123456789").document_order(0)),
+                )
+        }
+    }
+
+    pub(crate) fn sample_records() -> Vec<MessageRecord> {
+        (0..20)
+            .map(|ix| {
+                MessageRecord::new(
+                    Arc::from("orders"),
+                    0,
+                    1000 + ix,
+                    Some(1_700_000_000_000 + ix),
+                    Some(format!("key-{ix:04}").into_bytes()),
+                    Some(format!("value-{ix:04}").into_bytes()),
+                    Vec::new(),
+                )
+            })
+            .collect()
+    }
+
+    pub(crate) fn drag_scan(cx: &mut gpui::VisualTestContext) -> Vec<(f32, String)> {
+        drag_scan_in(cx, 10.0, 600.0, 4.0)
+    }
+
+    pub(crate) fn drag_scan_in(
+        cx: &mut gpui::VisualTestContext,
+        x0: f32,
+        x1: f32,
+        y0: f32,
+    ) -> Vec<(f32, String)> {
+        let mut found = Vec::new();
+        let mut y = y0;
+        while y < 400.0 {
+            cx.simulate_mouse_move(point(px(x0), px(y)), None, Modifiers::default());
+            cx.simulate_mouse_down(point(px(x0), px(y)), MouseButton::Left, Modifiers::default());
+            cx.simulate_mouse_move(point(px(x1), px(y)), Some(MouseButton::Left), Modifiers::default());
+            cx.simulate_mouse_up(point(px(x1), px(y)), MouseButton::Left, Modifiers::default());
+            let text = cx.update(|window, cx| {
+                let _ = window.draw(cx);
+                TextSelection::selected_text(window, cx).to_string()
+            });
+            if !text.trim().is_empty() {
+                found.push((y, text));
+            }
+            y += 6.0;
+        }
+        found
+    }
+
+    /// A drag with a repaint between each move, like the real window.
+    pub(crate) fn drag_with_redraw(
+        cx: &mut gpui::VisualTestContext,
+        x0: f32,
+        x1: f32,
+        y: f32,
+    ) -> String {
+        cx.simulate_mouse_move(point(px(x0), px(y)), None, Modifiers::default());
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.simulate_mouse_down(point(px(x0), px(y)), MouseButton::Left, Modifiers::default());
+        let mut x = x0;
+        while x < x1 {
+            x += (x1 - x0) / 8.0;
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            cx.simulate_mouse_move(point(px(x), px(y)), Some(MouseButton::Left), Modifiers::default());
+        }
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.simulate_mouse_up(point(px(x1), px(y)), MouseButton::Left, Modifiers::default());
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            TextSelection::selected_text(window, cx).to_string()
+        })
+    }
+
+    #[gpui::test]
+    fn plain_selectable_text_reports_a_selection(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let (_, cx) = cx.add_window_view(|_, _| PlainTestView);
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let found = drag_scan(cx);
+        assert!(!found.is_empty(), "a plain SelectableText must report a selection");
+    }
+
+    #[gpui::test]
+    fn a_drag_inside_one_cell_reports_a_selection(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let table = cx.new(|cx| {
+                TableState::new(MessageTableDelegate::new(), window, cx)
+                    .row_selectable(true)
+                    .col_resizable(true)
+                    .col_movable(true)
+                    .sortable(true)
+            });
+            table.update(cx, |table, _| table.delegate_mut().push_batch(sample_records()));
+            TableTestView { table }
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let wide = drag_scan(cx);
+        let (y, _) = *wide.first().expect("a wide drag selects something");
+        let inside = drag_with_redraw(cx, 210.0, 380.0, y);
+        assert!(
+            !inside.trim().is_empty(),
+            "a drag inside one cell at y={y} must select text, got {inside:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn message_table_cells_in_a_resizable_panel_report_a_selection(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let table = cx.new(|cx| {
+                TableState::new(MessageTableDelegate::new(), window, cx)
+                    .row_selectable(true)
+                    .col_resizable(true)
+                    .col_movable(true)
+                    .sortable(true)
+            });
+            table.update(cx, |table, _| table.delegate_mut().push_batch(sample_records()));
+            let split = cx.new(|_| ResizableState::default());
+            ResizableTestView { table, split }
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let found = drag_scan(cx);
+        assert!(!found.is_empty(), "a cell inside a resizable panel must report a selection");
+    }
+
+    #[gpui::test]
+    fn message_table_cells_report_a_selection(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let table = cx.new(|cx| {
+                TableState::new(MessageTableDelegate::new(), window, cx)
+                    .row_selectable(true)
+                    .col_resizable(true)
+                    .col_movable(true)
+                    .sortable(true)
+            });
+            table.update(cx, |table, _| table.delegate_mut().push_batch(sample_records()));
+            TableTestView { table }
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let found = drag_scan(cx);
+        assert!(!found.is_empty(), "a message table cell must report a selection; scanned rows produced nothing");
     }
 }
