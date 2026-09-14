@@ -20,6 +20,7 @@ Read the consumer groups of a topic, with the committed offset and the lag of ev
 - Import a Kafka client properties file. The app reads a JKS truststore and converts it to PEM.
 - Edit, rename, disconnect, or remove a connection from the menu button on each row.
 - Each connection shows its state as a colored dot, with the broker and topic count.
+- A connection that fails shows the broker error, a Retry button in the main area, and a reconnect button on its row. Reconnect also sits in the connection menu.
 
 **Topics**
 
@@ -232,6 +233,7 @@ These environment variables drive the app for measurements and automated checks.
 | `KAFKAMITTER_DEV_SELECT_GROUP=1` | Load the offsets of the first consumer group. |
 | `KAFKAMITTER_DEV_PRODUCE=1` | Send one test message to the selected topic. |
 | `KAFKAMITTER_DEV_SEARCH=term` | Put this term in the message search box after the topic is selected. |
+| `KAFKAMITTER_DEV_RETRY=1` | Reconnect once after the first connection attempt, to exercise the retry path. |
 | `KAFKAMITTER_DEV_TABTEST=mode` | Drive the tab actions once the topic loads. `new` opens a tab and stays on it, `switch` opens one and returns, anything else runs the whole lifecycle. |
 | `KAFKAMITTER_DEV_JUMP=top` | Select the first or the last row once every partition is caught up. Accepts `top` or `bottom`. |
 | `KAFKAMITTER_DEV_WINDOW=WxH` | Open the window at this size, to check the layout at a narrow width. |

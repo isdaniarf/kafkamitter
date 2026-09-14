@@ -136,6 +136,7 @@ pub struct KafkamitterApp {
     focus_handle: FocusHandle,
     reselect_after_refresh: Option<String>,
     dev_switch_back: Option<String>,
+    dev_retried: bool,
     first_render_traced: bool,
     _subscriptions: Vec<Subscription>,
 }
@@ -174,6 +175,7 @@ impl KafkamitterApp {
             focus_handle,
             reselect_after_refresh: None,
             dev_switch_back: None,
+            dev_retried: false,
             first_render_traced: false,
             _subscriptions: subscriptions,
         }
@@ -682,6 +684,15 @@ impl KafkamitterApp {
         }
     }
 
+    /// Drops the worker and connects again. Used after a failure and by the
+    /// Reconnect menu item.
+    fn reconnect(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        crate::startup::trace(&format!("reconnect requested for {id}"));
+        self.kafka.disconnect(&id);
+        self.states.remove(&id);
+        self.connect(id, window, cx);
+    }
+
     fn activate_connection(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
         if self.session().connection.as_deref() == Some(id.as_str()) {
             return;
@@ -789,12 +800,23 @@ impl KafkamitterApp {
                             self.messages().update(cx, |view, cx| view.start_default(window, cx));
                         }
                     }
+                    if std::env::var_os("KAFKAMITTER_DEV_RETRY").is_some() && !self.dev_retried {
+                        self.dev_retried = true;
+                        self.reconnect(id.clone(), window, cx);
+                        return;
+                    }
                     self.run_dev_tab_test(window, cx);
                     self.run_dev_switch_test(&id, window, cx);
                 }
             }
             Err(err) => {
                 crate::startup::trace(&format!("connection failed: {err}"));
+                if std::env::var_os("KAFKAMITTER_DEV_RETRY").is_some() && !self.dev_retried {
+                    self.dev_retried = true;
+                    self.states.insert(id.clone(), ConnState::Failed(err.to_string()));
+                    self.reconnect(id.clone(), window, cx);
+                    return;
+                }
                 self.states.insert(id.clone(), ConnState::Failed(err.to_string()));
                 self.kafka.disconnect(&id);
                 window.push_notification(Notification::error(format!("Connection failed: {err}")), cx);
@@ -1022,6 +1044,7 @@ impl KafkamitterApp {
     fn render_connection_row(&self, ix: usize, profile: &ConnectionProfile, cx: &mut Context<Self>) -> AnyElement {
         let id = profile.id.clone();
         let is_active = self.session().connection.as_deref() == Some(profile.id.as_str());
+        let failed = matches!(self.states.get(&profile.id), Some(ConnState::Failed(_)));
         let (dot, hint) = match self.states.get(&profile.id) {
             Some(ConnState::Connected(cluster)) => (
                 cx.theme().green,
@@ -1033,6 +1056,17 @@ impl KafkamitterApp {
         };
         let weak = cx.entity().downgrade();
         let click_id = id.clone();
+        let retry_button = failed.then(|| {
+            let retry_id = id.clone();
+            Button::new(("retry-connection", ix))
+                .ghost()
+                .xsmall()
+                .icon(IconName::RotateCw)
+                .tooltip("Reconnect")
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.reconnect(retry_id.clone(), window, cx)
+                }))
+        });
         h_flex()
             .id(SharedString::from(format!("connection-{}", profile.id)))
             .w_full()
@@ -1082,6 +1116,7 @@ impl KafkamitterApp {
                             .child(hint),
                     ),
             )
+            .children(retry_button)
             .child({
                 let weak = cx.entity().downgrade();
                 let menu_id = profile.id.clone();
@@ -1090,13 +1125,19 @@ impl KafkamitterApp {
                     .xsmall()
                     .icon(IconName::Ellipsis)
                     .dropdown_menu(move |menu, _, _| {
+                        let reconnect = weak.clone();
+                        let reconnect_id = menu_id.clone();
                         let edit = weak.clone();
                         let edit_id = menu_id.clone();
                         let disconnect = weak.clone();
                         let disconnect_id = menu_id.clone();
                         let remove = weak.clone();
                         let remove_id = menu_id.clone();
-                        menu.item(PopupMenuItem::new("Edit or rename…").on_click(move |_, window, cx| {
+                        menu.item(PopupMenuItem::new("Reconnect").on_click(move |_, window, cx| {
+                            let _ = reconnect
+                                .update(cx, |app, cx| app.reconnect(reconnect_id.clone(), window, cx));
+                        }))
+                        .item(PopupMenuItem::new("Edit or rename…").on_click(move |_, window, cx| {
                             let _ = edit.update(cx, |app, cx| app.edit_profile(&edit_id, window, cx));
                         }))
                         .item(PopupMenuItem::new("Disconnect").on_click(move |_, window, cx| {
@@ -1347,7 +1388,84 @@ impl KafkamitterApp {
             .into_any_element()
     }
 
+    fn render_connection_error(&self, id: &str, error: String, cx: &mut Context<Self>) -> AnyElement {
+        let name = self
+            .profiles
+            .iter()
+            .find(|p| p.id == id)
+            .map_or_else(|| id.to_string(), |p| p.name.clone());
+        let retry_id = id.to_string();
+        let edit_id = id.to_string();
+        v_flex()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .items_center()
+            .justify_center()
+            .gap_3()
+            .p_6()
+            .child(
+                div()
+                    .text_lg()
+                    .font_semibold()
+                    .child(format!("Cannot reach {name}")),
+            )
+            .child(
+                div()
+                    .max_w(px(560.))
+                    .text_sm()
+                    .text_center()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(error),
+            )
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(
+                        Button::new("retry-connection-main")
+                            .primary()
+                            .icon(IconName::RotateCw)
+                            .label("Retry")
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.reconnect(retry_id.clone(), window, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new("edit-connection-main")
+                            .outline()
+                            .label("Edit connection…")
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.edit_profile(&edit_id, window, cx)
+                            })),
+                    ),
+            )
+            .into_any_element()
+    }
+
     fn render_session_content(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(id) = self.session().connection.clone() {
+            match self.states.get(&id) {
+                Some(ConnState::Failed(error)) => {
+                    let error = error.clone();
+                    return self.render_connection_error(&id, error, cx);
+                }
+                Some(ConnState::Connecting) => {
+                    return v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            div()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("Connecting…"),
+                        )
+                        .into_any_element();
+                }
+                _ => {}
+            }
+        }
         let Some(topic) = self.session().topic.clone() else {
             let hint = if self.session().connection.is_some() {
                 "Select a topic"
