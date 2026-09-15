@@ -35,7 +35,7 @@ Read the consumer groups of a topic, with the committed offset and the lag of ev
 - Search the messages. The term matches the value, the key, and the header names and values. The table then shows only the messages that hold it.
 - Sort the table by any column. The first click sorts downward, the next click reverses it, and a third click returns to arrival order.
 - Resize the columns and drag them into a different order.
-- Inspect one message: value, key, and headers. Show the value as pretty JSON with the original key order and syntax colors. The preview colors JSON only. A header line or a value that is not JSON stays plain.
+- Inspect one message: value, key, and headers. Show the value as pretty JSON with the original key order and syntax colors. The preview colors JSON only. A header line or a value that is not JSON stays plain. A value above 2 MB shows as plain text without colors.
 - Copy the value, the key, or the headers with one button.
 - Select the text in the message table with the mouse and copy it with Cmd+C. The list holds its place while you drag.
 - Right-click a message row to copy its value, its key, its headers, or the whole row.

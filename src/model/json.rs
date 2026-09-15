@@ -1,7 +1,5 @@
 use std::ops::Range;
 
-use serde_json::Value;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JsonToken {
     Key,
@@ -84,8 +82,12 @@ pub fn try_pretty(bytes: &[u8]) -> Option<String> {
     if !looks_like_json(bytes) {
         return None;
     }
-    let value: Value = serde_json::from_slice(bytes).ok()?;
-    serde_json::to_string_pretty(&value).ok()
+    let mut out = Vec::with_capacity(bytes.len() + bytes.len() / 2);
+    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+    let mut serializer = serde_json::Serializer::pretty(&mut out);
+    serde_transcode::transcode(&mut deserializer, &mut serializer).ok()?;
+    deserializer.end().ok()?;
+    String::from_utf8(out).ok()
 }
 
 #[cfg(test)]
@@ -174,3 +176,5 @@ mod tests {
         assert!(out.starts_with("[\n  {\n    \"i\": 0,"));
     }
 }
+
+

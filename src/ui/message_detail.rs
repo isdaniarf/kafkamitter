@@ -10,6 +10,9 @@ use gpui_component::{ActiveTheme, IconName, Sizable, h_flex, v_flex};
 use crate::model::json::{looks_like_json, try_pretty};
 use crate::model::message::MessageRecord;
 
+const INLINE_RENDER_BYTES: usize = 64 * 1024;
+pub const LARGE_VALUE_BYTES: usize = 2 * 1024 * 1024;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DetailTab {
     Value,
@@ -34,8 +37,9 @@ pub struct MessageDetailView {
     tab: DetailTab,
     pretty: bool,
     editor: Entity<EditorState>,
-    text: String,
     json: bool,
+    generation: u64,
+    rendering: bool,
 }
 
 impl MessageDetailView {
@@ -55,8 +59,9 @@ impl MessageDetailView {
             tab: DetailTab::Value,
             pretty: true,
             editor,
-            text: String::new(),
             json: true,
+            generation: 0,
+            rendering: false,
         }
     }
 
@@ -85,31 +90,38 @@ impl MessageDetailView {
     }
 
     fn refresh_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (text, json) = match &self.record {
-            None => (String::new(), false),
-            Some(record) => match self.tab {
-                DetailTab::Value => render_bytes(record.value(), self.pretty),
-                DetailTab::Key => render_bytes(record.key(), self.pretty),
-                DetailTab::Headers => {
-                    if !record.has_headers() {
-                        (String::from("<no headers>"), false)
-                    } else {
-                        let text = record
-                            .headers()
-                            .map(|(k, v)| {
-                                format!(
-                                    "{k}: {}",
-                                    v.map_or("<null>".to_string(), |v| String::from_utf8_lossy(v).into_owned())
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        (text, false)
-                    }
-                }
-            },
+        self.generation += 1;
+        let generation = self.generation;
+        let Some(record) = self.record.clone() else {
+            self.rendering = false;
+            self.show(String::new(), false, window, cx);
+            return;
         };
-        self.text = text.clone();
+        let (tab, pretty) = (self.tab, self.pretty);
+        if tab_bytes(&record, tab) <= INLINE_RENDER_BYTES {
+            self.rendering = false;
+            let (text, json) = render_tab(&record, tab, pretty);
+            self.show(text, json, window, cx);
+            return;
+        }
+        self.rendering = true;
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let (text, json) = cx
+                .background_spawn(async move { render_tab(&record, tab, pretty) })
+                .await;
+            let _ = this.update_in(cx, |view, window, cx| {
+                if view.generation != generation {
+                    return;
+                }
+                view.rendering = false;
+                view.show(text, json, window, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn show(&mut self, text: String, json: bool, window: &mut Window, cx: &mut Context<Self>) {
         let changed = self.json != json;
         self.json = json;
         self.editor.update(cx, |editor, cx| {
@@ -122,7 +134,42 @@ impl MessageDetailView {
     }
 
     fn copy_text(&self, cx: &mut Context<Self>) {
-        cx.write_to_clipboard(ClipboardItem::new_string(self.text.clone()));
+        let text = self.editor.read(cx).value().to_string();
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+    }
+}
+
+fn tab_bytes(record: &MessageRecord, tab: DetailTab) -> usize {
+    match tab {
+        DetailTab::Value => record.value().map_or(0, <[u8]>::len),
+        DetailTab::Key => record.key().map_or(0, <[u8]>::len),
+        DetailTab::Headers => record
+            .headers()
+            .map(|(name, value)| name.len() + value.map_or(0, <[u8]>::len))
+            .sum(),
+    }
+}
+
+fn render_tab(record: &MessageRecord, tab: DetailTab, pretty: bool) -> (String, bool) {
+    match tab {
+        DetailTab::Value => render_bytes(record.value(), pretty),
+        DetailTab::Key => render_bytes(record.key(), pretty),
+        DetailTab::Headers => {
+            if !record.has_headers() {
+                return (String::from("<no headers>"), false);
+            }
+            let text = record
+                .headers()
+                .map(|(name, value)| {
+                    format!(
+                        "{name}: {}",
+                        value.map_or("<null>".to_string(), |value| String::from_utf8_lossy(value).into_owned())
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            (text, false)
+        }
     }
 }
 
@@ -130,6 +177,7 @@ fn render_bytes(bytes: Option<&[u8]>, pretty: bool) -> (String, bool) {
     match bytes {
         None => (String::from("<null>"), false),
         Some([]) => (String::from("<empty>"), false),
+        Some(bytes) if bytes.len() > LARGE_VALUE_BYTES => (String::from_utf8_lossy(bytes).into_owned(), false),
         Some(bytes) => {
             if pretty {
                 if let Some(text) = try_pretty(bytes) {
@@ -154,13 +202,19 @@ impl Render for MessageDetailView {
                 .into_any_element();
         };
         let tab_ix = DetailTab::ALL.iter().position(|t| *t == self.tab).unwrap_or(0);
-        let meta = format!(
+        let value_bytes = record.value().map_or(0, <[u8]>::len);
+        let mut meta = format!(
             "partition {}  offset {}  {}  {} bytes",
             record.partition,
             record.offset,
             record.timestamp_text(),
-            record.value().map_or(0, <[u8]>::len)
+            value_bytes
         );
+        if self.rendering {
+            meta.push_str("  ·  rendering");
+        } else if self.tab == DetailTab::Value && value_bytes > LARGE_VALUE_BYTES {
+            meta.push_str("  ·  large value, shown as plain text");
+        }
         v_flex()
             .size_full()
             .child(
@@ -220,7 +274,7 @@ impl Render for MessageDetailView {
 
 #[cfg(test)]
 mod tests {
-    use super::render_bytes;
+    use super::{LARGE_VALUE_BYTES, render_bytes};
 
     #[test]
     fn json_values_ask_for_the_json_highlighter() {
@@ -247,5 +301,13 @@ mod tests {
         let (text, json) = render_bytes(Some(br#"{"id":1}"#), false);
         assert_eq!(text, r#"{"id":1}"#);
         assert!(json);
+    }
+
+    #[test]
+    fn a_large_value_is_shown_raw_without_a_highlighter() {
+        let big = format!("{{\"a\":\"{}\"}}", "x".repeat(LARGE_VALUE_BYTES));
+        let (text, json) = render_bytes(Some(big.as_bytes()), true);
+        assert_eq!(text, big);
+        assert!(!json);
     }
 }

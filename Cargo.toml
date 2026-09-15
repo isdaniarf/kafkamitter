@@ -16,7 +16,8 @@ gpui-kit-assets = "=0.6.1"
 rdkafka-sys = "4.10"
 rdkafka = { version = "0.39", default-features = false, features = ["cmake-build", "ssl-vendored", "libz", "zstd", "naive-runtime"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["preserve_order"] }
+serde_json = "1"
+serde-transcode = "1"
 rustls-native-certs = "0.8"
 security-framework = "3"
 base64 = "0.22"
