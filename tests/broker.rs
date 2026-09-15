@@ -115,10 +115,16 @@ fn end_to_end_against_a_real_broker() {
     let session = ConsumeSession::start(&base, topic.clone(), Vec::new(), StartFrom::Beginning, tx);
     let mut records = Vec::new();
     let mut eof = std::collections::BTreeSet::new();
+    let mut position = None;
     let deadline = Instant::now() + TIMEOUT;
     while (records.len() < 3 || eof.len() < 2) && Instant::now() < deadline {
         match rx.recv_blocking() {
-            Ok(ConsumeEvent::Batch(batch)) => records.extend(batch),
+            Ok(ConsumeEvent::Batch(batch)) => {
+                if let Some(found) = batch.positions.iter().find(|p| p.partition == 0) {
+                    position = Some((found.first, found.last, found.high));
+                }
+                records.extend(batch.records);
+            }
             Ok(ConsumeEvent::Eof(p)) => {
                 eof.insert(p);
             }
@@ -129,6 +135,7 @@ fn end_to_end_against_a_real_broker() {
     }
     session.stop();
     assert_eq!(records.len(), 3, "expected 3 records");
+    assert_eq!(position, Some((0, 2, 3)), "the batch must carry the offsets and the cached high watermark");
 
     let (tx, rx) = smol::channel::bounded(64);
     let newest = ConsumeSession::start(&base, topic.clone(), vec![0], StartFrom::Newest(2), tx);
@@ -137,7 +144,7 @@ fn end_to_end_against_a_real_broker() {
     let mut newest_eof = false;
     while !newest_eof && Instant::now() < deadline {
         match rx.recv_blocking() {
-            Ok(ConsumeEvent::Batch(batch)) => newest_records.extend(batch),
+            Ok(ConsumeEvent::Batch(batch)) => newest_records.extend(batch.records),
             Ok(ConsumeEvent::Eof(_)) => newest_eof = true,
             Ok(ConsumeEvent::Error(err)) => panic!("newest consume error: {err}"),
             Ok(ConsumeEvent::Assigned(_)) => {}

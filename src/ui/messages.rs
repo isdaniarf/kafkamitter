@@ -1,7 +1,8 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder as _;
 use gpui_base::{SelectableText, TextSelection};
@@ -27,7 +28,7 @@ const MAX_MESSAGES: usize = 10_000;
 const MAX_BYTES: usize = 256 * 1024 * 1024;
 const NEWEST_PER_PARTITION: i64 = 200;
 const START_MODES: [&str; 5] = ["Newest 200", "Latest", "Beginning", "Offset", "Timestamp"];
-const SEARCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(100);
+const SEARCH_DEBOUNCE: Duration = Duration::from_millis(100);
 
 pub struct MessageTableDelegate {
     pub store: MessageStore,
@@ -389,6 +390,77 @@ fn hold_scroll_while_dragging(guard: Rc<ScrollGuard>) -> impl IntoElement {
     .size_0()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PartitionProgress {
+    partition: i32,
+    first: Option<i64>,
+    last: i64,
+    high: i64,
+    done: bool,
+}
+
+impl PartitionProgress {
+    fn new(partition: i32) -> Self {
+        Self {
+            partition,
+            first: None,
+            last: -1,
+            high: -1,
+            done: false,
+        }
+    }
+}
+
+pub(crate) fn progress_percent(progress: &[PartitionProgress]) -> Option<u8> {
+    let (mut read, mut total) = (0i64, 0i64);
+    for entry in progress {
+        let Some(first) = entry.first else {
+            continue;
+        };
+        let span = (entry.high - first).max(0);
+        if span == 0 {
+            continue;
+        }
+        read += if entry.done { span } else { (entry.last - first + 1).clamp(0, span) };
+        total += span;
+    }
+    (total > 0).then(|| (read * 100 / total).clamp(0, 100) as u8)
+}
+
+#[derive(Default)]
+pub(crate) struct RateMeter {
+    samples: VecDeque<(Instant, u64)>,
+}
+
+impl RateMeter {
+    const WINDOW: Duration = Duration::from_secs(2);
+    const MIN_SPAN: Duration = Duration::from_millis(250);
+
+    fn record(&mut self, now: Instant, bytes: u64) {
+        let total = self.samples.back().map_or(0, |sample| sample.1) + bytes;
+        self.samples.push_back((now, total));
+        while self.samples.len() > 2 && now.duration_since(self.samples[0].0) > Self::WINDOW {
+            self.samples.pop_front();
+        }
+    }
+
+    fn bytes_per_second(&self, now: Instant) -> Option<f64> {
+        let (first, last) = (self.samples.front()?, self.samples.back()?);
+        if now.duration_since(last.0) > Self::WINDOW {
+            return None;
+        }
+        let span = last.0.duration_since(first.0);
+        if span < Self::MIN_SPAN {
+            return None;
+        }
+        Some((last.1 - first.1) as f64 / span.as_secs_f64())
+    }
+
+    fn clear(&mut self) {
+        self.samples.clear();
+    }
+}
+
 pub struct MessagesView {
     worker: Option<Rc<WorkerHandle>>,
     topic: Option<Arc<TopicInfo>>,
@@ -411,6 +483,9 @@ pub struct MessagesView {
     running: bool,
     assigned: Vec<i32>,
     eof: BTreeSet<i32>,
+    progress: Vec<PartitionProgress>,
+    rate: RateMeter,
+    rate_refresh: Option<Task<()>>,
     last_error: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
@@ -469,6 +544,9 @@ impl MessagesView {
             running: false,
             assigned: Vec::new(),
             eof: BTreeSet::new(),
+            progress: Vec::new(),
+            rate: RateMeter::default(),
+            rate_refresh: None,
             last_error: None,
             _subscriptions: subscriptions,
         }
@@ -711,6 +789,9 @@ impl MessagesView {
         self.running = true;
         self.assigned.clear();
         self.eof.clear();
+        self.progress.clear();
+        self.rate.clear();
+        self.rate_refresh = None;
         self.last_error = None;
         self.open_newest_pending = self.settings.open_newest_message;
         cx.spawn_in(window, async move |this, cx| {
@@ -759,19 +840,39 @@ impl MessagesView {
         match event {
             ConsumeEvent::Assigned(partitions) => {
                 crate::startup::trace(&format!("consume assigned partitions {partitions:?}"));
+                self.progress = partitions.iter().map(|&p| PartitionProgress::new(p)).collect();
                 self.assigned = partitions;
             }
-            ConsumeEvent::Batch(batch) => self.table.update(cx, |table, cx| {
-                table.delegate_mut().push_batch(batch);
-                table.refresh(cx);
-                crate::startup::trace(&format!(
-                    "consume batch: {} shown, {} received",
-                    table.delegate().store.len(),
-                    table.delegate().store.total_received()
-                ));
-            }),
+            ConsumeEvent::Batch(batch) => {
+                self.rate.record(Instant::now(), batch.bytes as u64);
+                for position in &batch.positions {
+                    if let Some(entry) = self.progress.iter_mut().find(|e| e.partition == position.partition) {
+                        entry.first.get_or_insert(position.first);
+                        entry.last = position.last;
+                        if position.high >= 0 {
+                            entry.high = position.high;
+                        }
+                    }
+                }
+                self.rate_refresh = Some(cx.spawn_in(window, async move |this, cx| {
+                    cx.background_executor().timer(RateMeter::WINDOW).await;
+                    let _ = this.update_in(cx, |_, _, cx| cx.notify());
+                }));
+                self.table.update(cx, |table, cx| {
+                    table.delegate_mut().push_batch(batch.records);
+                    table.refresh(cx);
+                    crate::startup::trace(&format!(
+                        "consume batch: {} shown, {} received",
+                        table.delegate().store.len(),
+                        table.delegate().store.total_received()
+                    ));
+                });
+            }
             ConsumeEvent::Eof(partition) => {
                 crate::startup::trace(&format!("consume eof partition {partition}"));
+                if let Some(entry) = self.progress.iter_mut().find(|e| e.partition == partition) {
+                    entry.done = true;
+                }
                 self.eof.insert(partition);
                 if !self.assigned.is_empty() && self.eof.len() >= self.assigned.len() {
                     let store = &self.table.read(cx).delegate().store;
@@ -816,20 +917,47 @@ impl MessagesView {
         }
     }
 
+    fn caught_up(&self) -> bool {
+        !self.assigned.is_empty() && self.eof.len() >= self.assigned.len()
+    }
+
+    fn progress_fraction(&self) -> Option<f32> {
+        if !self.running || self.assigned.is_empty() || self.caught_up() {
+            return None;
+        }
+        progress_percent(&self.progress).map(|percent| f32::from(percent) / 100.)
+    }
+
     fn status_text(&self, cx: &App) -> String {
         let store = &self.table.read(cx).delegate().store;
-        let mut parts = if store.has_query() {
-            vec![format!("{} of {} shown", store.matched_len(), store.len())]
+        let mut parts = Vec::new();
+        if self.running {
+            if self.assigned.is_empty() {
+                parts.push("starting".to_string());
+            } else {
+                let caught_up = self.caught_up();
+                if caught_up {
+                    parts.push("live".to_string());
+                } else if let Some(percent) = progress_percent(&self.progress) {
+                    parts.push(format!("{percent}%"));
+                }
+                if let Some(rate) = self.rate.bytes_per_second(Instant::now()) {
+                    parts.push(format!("{}/s", format_bytes(rate as usize)));
+                }
+                if !caught_up {
+                    parts.push(format!("caught up {}/{}", self.eof.len(), self.assigned.len()));
+                }
+            }
+        }
+        if store.has_query() {
+            parts.push(format!("{} of {} shown", store.matched_len(), store.len()));
         } else {
-            vec![format!("{} shown", store.len())]
-        };
+            parts.push(format!("{} shown", store.len()));
+        }
         if store.total_received() as usize > store.len() {
             parts.push(format!("{} received", store.total_received()));
         }
         parts.push(format_bytes(store.total_bytes()));
-        if self.running && !self.assigned.is_empty() {
-            parts.push(format!("caught up {}/{}", self.eof.len(), self.assigned.len()));
-        }
         if let Some(err) = &self.last_error {
             parts.push(format!("error: {err}"));
         }
@@ -890,6 +1018,7 @@ impl Render for MessagesView {
             .child(
                 h_flex()
                     .w_full()
+                    .relative()
                     .px_3()
                     .py_2()
                     .gap_2()
@@ -897,6 +1026,17 @@ impl Render for MessagesView {
                     .flex_nowrap()
                     .border_b_1()
                     .border_color(cx.theme().border)
+                    .when_some(self.progress_fraction(), |el, fraction| {
+                        el.child(
+                            div()
+                                .absolute()
+                                .left(px(0.))
+                                .bottom(px(0.))
+                                .h(px(2.))
+                                .w(relative(fraction))
+                                .bg(cx.theme().primary),
+                        )
+                    })
                     .child(
                         div()
                             .flex_none()
@@ -1322,5 +1462,57 @@ mod search_tests {
         cx.executor().advance_clock(SEARCH_DEBOUNCE);
         cx.run_until_parked();
         assert!(has_query(cx), "the scan must run once the debounce ends");
+    }
+}
+
+#[cfg(test)]
+mod progress_tests {
+    use std::prelude::v1::test;
+
+    use super::*;
+
+    #[test]
+    fn the_percent_counts_read_messages_against_the_high_marks() {
+        let mut progress = vec![PartitionProgress::new(0), PartitionProgress::new(1)];
+        assert_eq!(progress_percent(&progress), None);
+        progress[0].first = Some(0);
+        progress[0].last = 49;
+        progress[0].high = 100;
+        assert_eq!(progress_percent(&progress), Some(50));
+        progress[1].first = Some(10);
+        progress[1].last = 10;
+        progress[1].high = 110;
+        assert_eq!(progress_percent(&progress), Some(25));
+        progress[0].done = true;
+        progress[1].done = true;
+        assert_eq!(progress_percent(&progress), Some(100));
+    }
+
+    #[test]
+    fn an_unknown_high_mark_and_an_empty_partition_count_for_nothing() {
+        let mut progress = vec![PartitionProgress::new(0), PartitionProgress::new(1)];
+        progress[0].first = Some(5);
+        progress[0].last = 9;
+        assert_eq!(progress_percent(&progress), None);
+        progress[1].done = true;
+        assert_eq!(progress_percent(&progress), None);
+        progress[0].high = 10;
+        assert_eq!(progress_percent(&progress), Some(100));
+    }
+
+    #[test]
+    fn the_rate_uses_a_two_second_window_and_decays() {
+        let mut meter = RateMeter::default();
+        let start = Instant::now();
+        assert_eq!(meter.bytes_per_second(start), None);
+        meter.record(start, 1000);
+        assert_eq!(meter.bytes_per_second(start), None);
+        meter.record(start + Duration::from_secs(1), 1000);
+        assert_eq!(meter.bytes_per_second(start + Duration::from_secs(1)), Some(1000.0));
+        meter.record(start + Duration::from_secs(3), 4000);
+        assert_eq!(meter.bytes_per_second(start + Duration::from_secs(3)), Some(2000.0));
+        assert_eq!(meter.bytes_per_second(start + Duration::from_secs(6)), None);
+        meter.clear();
+        assert_eq!(meter.bytes_per_second(start + Duration::from_secs(3)), None);
     }
 }

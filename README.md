@@ -32,6 +32,7 @@ Read the consumer groups of a topic, with the committed offset and the lag of ev
 
 - Select a topic and the newest 200 messages of each partition load at once. The newest message opens in the preview.
 - Other start points: latest, beginning, a given offset, or a timestamp. You can limit the consumer to one partition.
+- While the consumer runs, the status shows the percent read against the high watermarks, the rate in bytes per second, and the partitions that caught up. A thin bar under the toolbar shows the same percent. In Latest mode the status shows `live` and the rate.
 - Search the messages. The term matches the value, the key, and the header names and values. The table then shows only the messages that hold it.
 - Sort the table by any column. The first click sorts downward, the next click reverses it, and a third click returns to arrival order.
 - Resize the columns and drag them into a different order.
