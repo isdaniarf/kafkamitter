@@ -17,6 +17,7 @@ use crate::kafka::metadata::{ClusterInfo, TopicInfo};
 use crate::kafka::worker::{Cmd, WorkerHandle};
 use crate::model::keychain;
 use crate::model::profile::{ConnectionProfile, Security, load_profiles, profiles_path, save_profiles};
+use crate::ui::about::open_about_dialog;
 use crate::ui::connections::open_connection_dialog;
 use crate::ui::messages::MessagesView;
 use crate::ui::produce::ProduceView;
@@ -36,6 +37,7 @@ actions!(
     kafkamitter,
     [
         Quit,
+        OpenAbout,
         OpenSettings,
         GoToTop,
         GoToBottom,
@@ -554,6 +556,10 @@ impl KafkamitterApp {
             view.update(cx, |view, cx| view.apply_settings(&settings, window, cx));
         }
         cx.notify();
+    }
+
+    fn on_open_about(&mut self, _: &OpenAbout, window: &mut Window, cx: &mut Context<Self>) {
+        open_about_dialog(window, cx);
     }
 
     fn on_open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
@@ -1667,6 +1673,7 @@ impl Render for KafkamitterApp {
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::on_create_topic))
             .on_action(cx.listener(Self::on_delete_topic))
+            .on_action(cx.listener(Self::on_open_about))
             .on_action(cx.listener(Self::on_open_settings))
             .on_action(cx.listener(Self::on_go_to_top))
             .on_action(cx.listener(Self::on_go_to_bottom))
@@ -1774,6 +1781,42 @@ mod selection_app_tests {
         assert!(
             !live.is_empty(),
             "a drag with a repaint between each move must report a selection"
+        );
+    }
+}
+
+#[cfg(test)]
+mod dialog_tests {
+    use std::prelude::v1::test;
+
+    use super::*;
+    use gpui_component::Root;
+
+    #[gpui::test]
+    fn the_about_dialog_reaches_the_screen(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| KafkamitterApp::new(window, cx));
+            Root::new(view, window, cx)
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(
+            cx.debug_bounds("dialog-layer").is_none(),
+            "no dialog shows before the action"
+        );
+        cx.update(|window, cx| window.dispatch_action(Box::new(OpenAbout), cx));
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        assert!(
+            cx.debug_bounds("dialog-layer").is_some(),
+            "the about dialog must reach the screen"
         );
     }
 }

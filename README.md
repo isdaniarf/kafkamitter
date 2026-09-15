@@ -153,6 +153,16 @@ kafkamitter --import ~/kafka/staging.properties
 
 `--import` saves the file as a connection, with its password. A connection with the same name is replaced.
 
+```sh
+kafkamitter --version
+```
+
+`--version` prints one line, for example `Kafkamitter 0.2.1 (macos aarch64, librdkafka 2.12.1)`.
+
+## Version
+
+The Kafkamitter menu holds the item About Kafkamitter. It shows the app version, the platform, and the librdkafka version. The Copy version button puts the same line on the clipboard, which helps when you report a problem.
+
 ## Install
 
 ```sh

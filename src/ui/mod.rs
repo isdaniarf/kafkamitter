@@ -1,3 +1,4 @@
+pub mod about;
 pub mod connections;
 pub mod consumers;
 pub mod dialog_footer;

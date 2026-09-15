@@ -11,7 +11,7 @@ use gpui_component::{Root, TitleBar};
 use app::{
     CloseAllTabs, CloseTab, ConsumeSelected, DuplicateTab, EditActiveConnection, FocusMessageValue,
     GoToBottom, GoToTop, NewTab, NextConnection,
-    FocusSearch, OpenSettings, PreviousConnection, Quit, StopConsume, SwitchConnection,
+    FocusSearch, OpenAbout, OpenSettings, PreviousConnection, Quit, StopConsume, SwitchConnection,
 };
 
 fn key_bindings() -> Vec<KeyBinding> {
@@ -47,6 +47,8 @@ fn menus() -> Vec<Menu> {
         Menu {
             name: "Kafkamitter".into(),
             items: vec![
+                MenuItem::action("About Kafkamitter", OpenAbout),
+                MenuItem::Separator,
                 MenuItem::action("Settings…", OpenSettings),
                 MenuItem::Separator,
                 MenuItem::action("Quit", Quit),

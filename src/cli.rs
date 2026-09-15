@@ -7,8 +7,14 @@ pub fn run(args: &[String]) -> Option<i32> {
     match args {
         [flag, path] if flag == "--check" => Some(check(Path::new(path))),
         [flag, path] if flag == "--import" => Some(import(Path::new(path))),
+        [flag] if flag == "--version" || flag == "-V" => {
+            println!("{}", crate::ui::about::summary());
+            Some(0)
+        }
         [flag] if flag == "--help" || flag == "-h" => {
-            println!("usage: kafkamitter [--check <file.properties> | --import <file.properties>]");
+            println!(
+                "usage: kafkamitter [--check <file.properties> | --import <file.properties> | --version]"
+            );
             Some(0)
         }
         _ => None,
