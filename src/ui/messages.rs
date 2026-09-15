@@ -28,16 +28,6 @@ const MAX_BYTES: usize = 256 * 1024 * 1024;
 const NEWEST_PER_PARTITION: i64 = 200;
 const START_MODES: [&str; 5] = ["Newest 200", "Latest", "Beginning", "Offset", "Timestamp"];
 
-pub fn format_timestamp(timestamp_ms: Option<i64>) -> String {
-    match timestamp_ms.and_then(chrono::DateTime::from_timestamp_millis) {
-        Some(utc) => utc
-            .with_timezone(&chrono::Local)
-            .format("%Y-%m-%d %H:%M:%S%.3f")
-            .to_string(),
-        None => String::from("-"),
-    }
-}
-
 pub struct MessageTableDelegate {
     pub store: MessageStore,
     columns: Vec<Column>,
@@ -142,7 +132,7 @@ impl MessageTableDelegate {
         match self.columns.get(col_ix).map(|c| c.key.as_ref()) {
             Some("partition") => record.partition.to_string().into(),
             Some("offset") => record.offset.to_string().into(),
-            Some("timestamp") => format_timestamp(record.timestamp_ms).into(),
+            Some("timestamp") => record.timestamp_text().clone().into(),
             Some("key") => record.key_preview().clone().into(),
             Some("value") => record.value_preview().clone().into(),
             _ => SharedString::default(),

@@ -9,7 +9,6 @@ use gpui_component::{ActiveTheme, IconName, Sizable, h_flex, v_flex};
 
 use crate::model::json::{looks_like_json, try_pretty};
 use crate::model::message::MessageRecord;
-use crate::ui::messages::format_timestamp;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DetailTab {
@@ -159,7 +158,7 @@ impl Render for MessageDetailView {
             "partition {}  offset {}  {}  {} bytes",
             record.partition,
             record.offset,
-            format_timestamp(record.timestamp_ms),
+            record.timestamp_text(),
             record.value().map_or(0, <[u8]>::len)
         );
         v_flex()

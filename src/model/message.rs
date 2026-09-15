@@ -28,6 +28,7 @@ pub struct MessageRecord {
     headers: Box<[HeaderSpan]>,
     key_preview: Arc<str>,
     value_preview: Arc<str>,
+    timestamp_text: OnceLock<Arc<str>>,
 }
 
 impl MessageRecord {
@@ -67,6 +68,7 @@ impl MessageRecord {
             headers: header_spans,
             key_preview: preview(key, KEY_PREVIEW_CHARS),
             value_preview: preview(value, VALUE_PREVIEW_CHARS),
+            timestamp_text: OnceLock::new(),
         }
     }
 
@@ -97,6 +99,11 @@ impl MessageRecord {
         &self.value_preview
     }
 
+    pub fn timestamp_text(&self) -> &Arc<str> {
+        self.timestamp_text
+            .get_or_init(|| Arc::from(format_timestamp(self.timestamp_ms)))
+    }
+
     /// The heap bytes of one stored record, including its own struct and the
     /// slots that the store keeps for it.
     pub fn byte_len(&self) -> usize {
@@ -117,6 +124,16 @@ fn append(bytes: &mut Vec<u8>, chunk: &[u8]) -> Range<u32> {
     let start = bytes.len() as u32;
     bytes.extend_from_slice(chunk);
     start..bytes.len() as u32
+}
+
+pub fn format_timestamp(timestamp_ms: Option<i64>) -> String {
+    match timestamp_ms.and_then(chrono::DateTime::from_timestamp_millis) {
+        Some(utc) => utc
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M:%S%.3f")
+            .to_string(),
+        None => String::from("-"),
+    }
 }
 
 pub fn preview(bytes: Option<&[u8]>, max_chars: usize) -> Arc<str> {
@@ -402,6 +419,16 @@ mod tests {
         assert_eq!(tombstone.value(), None);
         assert!(!tombstone.has_headers());
         assert_eq!(tombstone.value_preview().as_ref(), "<null>");
+    }
+
+    #[test]
+    fn the_timestamp_text_is_formatted_once() {
+        let record = record(1, 1);
+        let first = record.timestamp_text().clone();
+        assert_eq!(first.as_ref(), format_timestamp(record.timestamp_ms));
+        assert!(Arc::ptr_eq(&first, record.timestamp_text()));
+        let none = MessageRecord::new(Arc::from("t"), 0, 0, None, None, None, &[]);
+        assert_eq!(none.timestamp_text().as_ref(), "-");
     }
 
     #[test]
