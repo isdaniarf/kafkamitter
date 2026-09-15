@@ -32,7 +32,7 @@ Read the consumer groups of a topic, with the committed offset and the lag of ev
 
 - Select a topic and the newest 200 messages of each partition load at once. The newest message opens in the preview.
 - Other start points: latest, beginning, a given offset, or a timestamp. You can limit the consumer to one partition.
-- While the consumer runs, the status shows the percent read against the high watermarks, the rate in bytes per second, and the partitions that caught up. A thin bar under the toolbar shows the same percent. In Latest mode the status shows `live` and the rate.
+- While the consumer runs, the status shows the percent read against the high watermarks, the rate in bytes per second, and the partitions that caught up. A thin bar under the toolbar shows the same percent. The status shows `starting` until the partitions are assigned, and `live` with the rate when every partition is caught up. In Latest mode that happens at once.
 - Search the messages. The term matches the value, the key, and the header names and values. The table then shows only the messages that hold it.
 - Sort the table by any column. The first click sorts downward, the next click reverses it, and a third click returns to arrival order.
 - Resize the columns and drag them into a different order.
@@ -158,7 +158,7 @@ kafkamitter --import ~/kafka/staging.properties
 kafkamitter --version
 ```
 
-`--version` prints one line, for example `Kafkamitter 0.2.1 (macos aarch64, librdkafka 2.12.1)`.
+`--version` prints one line, for example `Kafkamitter 0.2.3 (macos aarch64, librdkafka 2.12.1)`.
 
 ## Version
 
@@ -281,23 +281,29 @@ Measured on an Apple M-series Mac with the release build and the local Homebrew 
 
 | Metric | Value |
 | --- | --- |
-| Release binary | 18.4 MB |
+| Release binary | 18.5 MB |
 | App bundle | 19 MB |
-| Time to first render | 174 to 221 ms |
-| Time to cluster metadata after process start | 254 to 358 ms |
-| Consume 1 000 000 messages of 512 bytes | 2.9 to 11.9 s, so 85 000 to 350 000 messages per second |
-| Resident memory during that consume | 112 to 120 MB, flat after the message cap |
-| Apply a search term to a full table | 5 ms for 10 000 messages and 17 MB |
+| Time to first render | 155 to 184 ms |
+| Time to cluster metadata after process start | 233 to 272 ms |
+| Memory with a connection and no topic | 92 MB |
+| Consume 30 000 messages of 1 KB | 0.4 s, 109 MB |
+| Consume 1 000 000 messages of 512 bytes | 13 s, so about 76 000 messages per second |
+| Memory during that consume | 123 MB, flat after the message cap |
+| Apply a search term to a full table | 0.3 ms for 10 000 messages |
 
-The consume time depends on how much of the topic the broker serves from its page cache. The slower figure is the steady state after several runs.
+The consume time depends on how much of the topic the broker serves from its page cache. The table keeps the newest 10 000 messages and drops the rest, so the memory stays flat after the cap. The search number is the filter pass over every message; the toolbar waits 100 ms after the last keystroke before it runs that pass.
 
 ## Design notes
 
 - The user interface runs on the main thread. Each connection owns one worker thread that holds the librdkafka clients. The interface sends a command and awaits a reply, so a slow broker never blocks the window.
-- Each consume session owns one more thread. That thread polls the consumer and sends batches over a bounded channel. A full channel pauses the fetch, so the interface never falls behind.
-- The message table keeps at most 10 000 messages or 256 MB. The oldest messages leave first. The table builds the preview text on the poll thread, so a cell never scans a message body.
+- Each consume session owns one more thread. That thread polls the consumer and sends batches of at most 256 messages over a channel that holds four batches. A full channel pauses the fetch, so the interface never falls behind.
+- librdkafka keeps a prefetch queue of 16 MB for each partition. A smaller queue makes the fetch wait for the broker between rounds and cuts the load speed by about ten times.
+- Each message holds its key, its value, and its headers in one buffer. The record keeps a range for each part, so a message needs one allocation and not one for each field. The two preview strings are reference counted and the timestamp text is built once, when a cell first asks for it.
+- The message table keeps at most 10 000 messages, and every tab with a topic shares the memory budget of 256 MB. The oldest messages leave first. The table builds the preview text on the poll thread, so a cell never scans a message body.
+- A new batch merges into the visible rows instead of a full rebuild, so a running consumer costs the same whether the table holds 100 or 10 000 messages.
 - The message toolbar holds one row at every width. The controls keep their size, the search box takes the space that is left, and the status text shortens last.
-- The search term matches bytes, so it never decodes a message. It folds ASCII letters, which makes it case-insensitive without an allocation. The table keeps one match flag for each message, tests only the new messages of each batch, and rebuilds the visible rows at most once for each frame.
+- The search term matches bytes, so it never decodes a message. It folds ASCII letters, which makes it case-insensitive without an allocation. The table keeps one match flag for each message, tests only the new messages of each batch, and rebuilds the visible rows at most once for each frame. The toolbar waits 100 ms after the last keystroke, so a long term costs one pass and not one for each letter.
+- The preview streams the pretty JSON from the message bytes to the text, without a tree of values in between, which keeps the original key order. A value above 64 KB is formatted on a background thread, and a value above 2 MB shows as plain text.
 - The message viewer never joins a consumer group and never commits an offset. It assigns partitions directly.
 - The app reads the offsets of a group with a `ListConsumerGroupOffsets` request. The optional scan for inactive groups sends 32 of those requests at a time over one connection.
 - Active consumer groups come from the group list and from the partition assignment of each member. The app decodes that assignment itself.
