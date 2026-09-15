@@ -361,6 +361,7 @@ impl KafkamitterApp {
             self.current = self.current.saturating_sub(1).min(self.sessions.len() - 1);
         }
         self.sync_sidebar_to_session(cx);
+        self.rebalance_budget(cx);
         cx.notify();
     }
 
@@ -376,6 +377,7 @@ impl KafkamitterApp {
         self.sessions.push(Session::new(id, window, cx));
         self.current = 0;
         self.sync_sidebar_to_session(cx);
+        self.rebalance_budget(cx);
         cx.notify();
     }
 
@@ -555,7 +557,17 @@ impl KafkamitterApp {
         for view in views {
             view.update(cx, |view, cx| view.apply_settings(&settings, window, cx));
         }
+        self.rebalance_budget(cx);
         cx.notify();
+    }
+
+    fn rebalance_budget(&mut self, cx: &mut Context<Self>) {
+        let holders = self.sessions.iter().filter(|s| s.topic.is_some()).count().max(1);
+        let share = self.settings.max_bytes() / holders;
+        let views: Vec<_> = self.sessions.iter().map(|s| s.messages.clone()).collect();
+        for view in views {
+            view.update(cx, |view, cx| view.set_memory_limit(share, cx));
+        }
     }
 
     fn on_open_about(&mut self, _: &OpenAbout, window: &mut Window, cx: &mut Context<Self>) {
@@ -1062,6 +1074,7 @@ impl KafkamitterApp {
         if changed && worker.is_some() && topic.is_some() && self.settings.auto_consume_on_select {
             self.messages().update(cx, |view, cx| view.start_default(window, cx));
         }
+        self.rebalance_budget(cx);
     }
 
     fn active_worker(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<Rc<WorkerHandle>> {

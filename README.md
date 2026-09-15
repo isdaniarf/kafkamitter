@@ -91,7 +91,7 @@ Cmd+, opens the settings dialog. The app saves the settings in `~/Library/Applic
 | Show values as pretty JSON | on | The preview starts with the Pretty JSON switch on. |
 | Newest messages per partition | 200 | How many messages the default start mode reads from each partition. |
 | Maximum messages kept | 10 000 | The table drops the oldest message above this count. |
-| Maximum memory for messages | 256 MB | The table drops the oldest message above this size. |
+| Memory for messages, all tabs | 256 MB | The tabs share this budget. Each tab with a topic gets an equal part and drops its oldest messages above that part. |
 
 ## Tabs
 

@@ -331,6 +331,7 @@ pub struct MessagesView {
     split: Entity<ResizableState>,
     scroll_guard: Rc<ScrollGuard>,
     settings: Settings,
+    memory_limit: usize,
     open_newest_pending: bool,
     dev_jump_done: bool,
     session: Option<ConsumeSession>,
@@ -387,6 +388,7 @@ impl MessagesView {
             split,
             scroll_guard: Rc::default(),
             settings: Settings::default(),
+            memory_limit: MAX_BYTES,
             open_newest_pending: false,
             dev_jump_done: false,
             session: None,
@@ -414,12 +416,27 @@ impl MessagesView {
 
     pub fn apply_settings(&mut self, settings: &Settings, window: &mut Window, cx: &mut Context<Self>) {
         self.settings = settings.clone();
+        let (max_messages, memory_limit) = (settings.max_messages, self.memory_limit);
         self.table.update(cx, |table, cx| {
-            table.delegate_mut().store.set_limits(settings.max_messages, settings.max_bytes());
+            table.delegate_mut().store.set_limits(max_messages, memory_limit);
             table.delegate_mut().mark_dirty();
             table.refresh(cx);
         });
         self.detail.update(cx, |detail, cx| detail.set_pretty_default(settings.pretty_json_default, window, cx));
+        cx.notify();
+    }
+
+    pub fn set_memory_limit(&mut self, bytes: usize, cx: &mut Context<Self>) {
+        if self.memory_limit == bytes {
+            return;
+        }
+        self.memory_limit = bytes;
+        let max_messages = self.settings.max_messages;
+        self.table.update(cx, |table, cx| {
+            table.delegate_mut().store.set_limits(max_messages, bytes);
+            table.delegate_mut().mark_dirty();
+            table.refresh(cx);
+        });
         cx.notify();
     }
 

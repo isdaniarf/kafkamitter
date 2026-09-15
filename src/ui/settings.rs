@@ -100,7 +100,7 @@ pub fn open_settings_dialog(
             .child(div().border_t_1().border_color(cx.theme().border))
             .child(field("Newest messages per partition", &newest))
             .child(field("Maximum messages kept", &max_messages))
-            .child(field("Maximum memory for messages (MB)", &max_megabytes));
+            .child(field("Memory for messages, all tabs (MB)", &max_megabytes));
         let theme = theme.clone();
         let newest = newest.clone();
         let max_messages = max_messages.clone();
