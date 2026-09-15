@@ -185,6 +185,7 @@ impl Render for MessageDetailView {
                     )
                     .child(
                         Switch::new("pretty-json")
+                            .small()
                             .checked(self.pretty)
                             .label("Pretty JSON")
                             .on_change(cx.listener(|this, checked: &bool, window, cx| {
