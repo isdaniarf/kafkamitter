@@ -616,7 +616,7 @@ impl MessagesView {
         self.stop(cx);
         self.generation += 1;
         let generation = self.generation;
-        let (tx, rx) = smol::channel::bounded::<ConsumeEvent>(64);
+        let (tx, rx) = smol::channel::bounded::<ConsumeEvent>(4);
         self.session = Some(ConsumeSession::start(
             worker.base_config(),
             topic.name.clone(),
