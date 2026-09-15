@@ -697,18 +697,36 @@ impl KafkamitterApp {
     }
 
     fn disconnect(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        if self.session().connection.as_deref() == Some(id) {
+        let current_uses_it = self.session().connection.as_deref() == Some(id);
+        if current_uses_it {
             self.remember_current_view();
         }
         self.kafka.disconnect(id);
         self.states.remove(id);
-        if self.session().connection.as_deref() == Some(id) {
-            self.session_mut().connection = None;
-            self.session_mut().topic = None;
+        for ix in self.sessions_on(id) {
+            self.sessions[ix].connection = None;
+            self.sessions[ix].topic = None;
+            self.sync_session_views(ix, window, cx);
+        }
+        if current_uses_it {
             self.set_topics(Vec::new(), cx);
-            self.sync_messages_view(window, cx);
         }
         cx.notify();
+    }
+
+    fn sessions_on(&self, id: &str) -> Vec<usize> {
+        self.sessions
+            .iter()
+            .enumerate()
+            .filter(|(_, session)| session.connection.as_deref() == Some(id))
+            .map(|(ix, _)| ix)
+            .collect()
+    }
+
+    fn detach_worker(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        for ix in self.sessions_on(id) {
+            self.sync_session_views(ix, window, cx);
+        }
     }
 
     fn import_properties(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -788,6 +806,7 @@ impl KafkamitterApp {
         crate::startup::trace(&format!("reconnect requested for {id}"));
         self.kafka.disconnect(&id);
         self.states.remove(&id);
+        self.detach_worker(&id, window, cx);
         self.connect(id, window, cx);
     }
 
@@ -906,6 +925,17 @@ impl KafkamitterApp {
                     self.run_dev_drag_test(window, cx);
                     self.run_dev_tab_test(window, cx);
                     self.run_dev_switch_test(&id, window, cx);
+                }
+                let current = self.current.min(self.sessions.len() - 1);
+                for ix in self.sessions_on(&id) {
+                    if ix == current {
+                        continue;
+                    }
+                    if let Some(name) = self.sessions[ix].topic.as_ref().map(|t| t.name.clone()) {
+                        self.sessions[ix].topic =
+                            cluster.topics.iter().find(|t| t.name == name).cloned().map(Arc::new);
+                    }
+                    self.sync_session_views(ix, window, cx);
                 }
             }
             Err(err) => {
@@ -1064,15 +1094,23 @@ impl KafkamitterApp {
     }
 
     fn sync_messages_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let worker = self.session().connection.as_deref().and_then(|id| self.kafka.existing(id));
-        let topic = self.session().topic.clone();
-        let changed = self
-            .messages()
-            .update(cx, |view, cx| view.set_topic(worker.clone(), topic.clone(), window, cx));
-        self.produce().update(cx, |view, cx| view.set_topic(worker.clone(), topic.clone(), window, cx));
-        self.consumers().update(cx, |view, cx| view.set_topic(worker.clone(), topic.clone(), window, cx));
+        let ix = self.current.min(self.sessions.len() - 1);
+        self.sync_session_views(ix, window, cx);
+    }
+
+    fn sync_session_views(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(session) = self.sessions.get(ix) else {
+            return;
+        };
+        let worker = session.connection.as_deref().and_then(|id| self.kafka.existing(id));
+        let topic = session.topic.clone();
+        let (messages, produce, consumers) =
+            (session.messages.clone(), session.produce.clone(), session.consumers.clone());
+        let changed = messages.update(cx, |view, cx| view.set_topic(worker.clone(), topic.clone(), window, cx));
+        produce.update(cx, |view, cx| view.set_topic(worker.clone(), topic.clone(), window, cx));
+        consumers.update(cx, |view, cx| view.set_topic(worker.clone(), topic.clone(), window, cx));
         if changed && worker.is_some() && topic.is_some() && self.settings.auto_consume_on_select {
-            self.messages().update(cx, |view, cx| view.start_default(window, cx));
+            messages.update(cx, |view, cx| view.start_default(window, cx));
         }
         self.rebalance_budget(cx);
     }
@@ -1831,5 +1869,61 @@ mod dialog_tests {
             cx.debug_bounds("dialog-layer").is_some(),
             "the about dialog must reach the screen"
         );
+    }
+}
+
+#[cfg(test)]
+mod disconnect_tests {
+    use std::prelude::v1::test;
+
+    use super::*;
+    use gpui_component::Root;
+
+    fn local_profile() -> ConnectionProfile {
+        ConnectionProfile {
+            id: "p".into(),
+            name: "local".into(),
+            bootstrap_servers: "localhost:1".into(),
+            security: Security::Plaintext,
+            ca_location: None,
+            password: None,
+        }
+    }
+
+    #[gpui::test]
+    fn a_disconnect_releases_the_worker_in_every_tab(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let app: Rc<std::cell::RefCell<Option<Entity<KafkamitterApp>>>> = Rc::default();
+        let captured = app.clone();
+        let (_, cx) = cx.add_window_view(move |window, cx| {
+            let view = cx.new(|cx| KafkamitterApp::new(window, cx));
+            *captured.borrow_mut() = Some(view.clone());
+            Root::new(view, window, cx)
+        });
+        let app = app.borrow().clone().expect("the app view exists");
+        let weak = cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                let profile = local_profile();
+                app.profiles.push(profile.clone());
+                app.settings.auto_consume_on_select = false;
+                let worker = app.kafka.worker(&profile, None);
+                let weak = Rc::downgrade(&worker);
+                drop(worker);
+                assert!(app.add_session(window, cx));
+                for session in &mut app.sessions {
+                    session.connection = Some(profile.id.clone());
+                }
+                for ix in 0..app.sessions.len() {
+                    app.sync_session_views(ix, window, cx);
+                }
+                assert!(app.sessions.iter().all(|s| s.messages.read(cx).has_worker()));
+                app.disconnect(&profile.id, window, cx);
+                assert!(app.sessions.iter().all(|s| s.connection.is_none()));
+                assert!(app.sessions.iter().all(|s| !s.messages.read(cx).has_worker()));
+                assert!(!app.kafka.is_connected(&profile.id));
+                weak
+            })
+        });
+        assert!(weak.upgrade().is_none(), "every tab must drop the worker");
     }
 }

@@ -407,6 +407,11 @@ impl MessagesView {
     }
 
     #[cfg(test)]
+    pub fn has_worker(&self) -> bool {
+        self.worker.is_some()
+    }
+
+    #[cfg(test)]
     pub fn push_for_test(&self, batch: Vec<MessageRecord>, cx: &mut App) {
         self.table.update(cx, |table, cx| {
             table.delegate_mut().push_batch(batch);
