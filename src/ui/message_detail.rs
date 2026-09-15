@@ -89,19 +89,18 @@ impl MessageDetailView {
         let (text, json) = match &self.record {
             None => (String::new(), false),
             Some(record) => match self.tab {
-                DetailTab::Value => render_bytes(record.value.as_deref(), self.pretty),
-                DetailTab::Key => render_bytes(record.key.as_deref(), self.pretty),
+                DetailTab::Value => render_bytes(record.value(), self.pretty),
+                DetailTab::Key => render_bytes(record.key(), self.pretty),
                 DetailTab::Headers => {
-                    if record.headers.is_empty() {
+                    if !record.has_headers() {
                         (String::from("<no headers>"), false)
                     } else {
                         let text = record
-                            .headers
-                            .iter()
+                            .headers()
                             .map(|(k, v)| {
                                 format!(
                                     "{k}: {}",
-                                    v.as_deref().map_or("<null>".to_string(), |v| String::from_utf8_lossy(v).into_owned())
+                                    v.map_or("<null>".to_string(), |v| String::from_utf8_lossy(v).into_owned())
                                 )
                             })
                             .collect::<Vec<_>>()
@@ -161,7 +160,7 @@ impl Render for MessageDetailView {
             record.partition,
             record.offset,
             format_timestamp(record.timestamp_ms),
-            record.value.as_ref().map_or(0, Vec::len)
+            record.value().map_or(0, <[u8]>::len)
         );
         v_flex()
             .size_full()

@@ -39,11 +39,11 @@ pub fn contains_ignore_ascii_case(haystack: &[u8], needle: &[u8]) -> bool {
 /// Reports whether the value, the key, or any header of `record` holds the term.
 pub fn matches(record: &MessageRecord, needle: &[u8]) -> bool {
     let holds = |bytes: Option<&[u8]>| bytes.is_some_and(|b| contains_ignore_ascii_case(b, needle));
-    holds(record.value.as_deref())
-        || holds(record.key.as_deref())
-        || record.headers.iter().any(|(name, value)| {
-            contains_ignore_ascii_case(name.as_bytes(), needle) || holds(value.as_deref())
-        })
+    holds(record.value())
+        || holds(record.key())
+        || record
+            .headers()
+            .any(|(name, value)| contains_ignore_ascii_case(name.as_bytes(), needle) || holds(value))
 }
 
 #[cfg(test)]
@@ -52,17 +52,15 @@ mod tests {
     use std::sync::Arc;
 
     fn record(key: Option<&str>, value: Option<&str>, headers: &[(&str, Option<&str>)]) -> MessageRecord {
+        let headers: Vec<(&str, Option<&[u8]>)> = headers.iter().map(|(n, v)| (*n, v.map(str::as_bytes))).collect();
         MessageRecord::new(
             Arc::from("t"),
             0,
             1,
             Some(0),
-            key.map(|k| k.as_bytes().to_vec()),
-            value.map(|v| v.as_bytes().to_vec()),
-            headers
-                .iter()
-                .map(|(n, v)| ((*n).to_string(), v.map(|v| v.as_bytes().to_vec())))
-                .collect(),
+            key.map(str::as_bytes),
+            value.map(str::as_bytes),
+            &headers,
         )
     }
 

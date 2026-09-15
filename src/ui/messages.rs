@@ -101,8 +101,8 @@ impl MessageTableDelegate {
                     "partition" => left.partition.cmp(&right.partition).then(left.offset.cmp(&right.offset)),
                     "offset" => left.offset.cmp(&right.offset).then(left.partition.cmp(&right.partition)),
                     "timestamp" => left.timestamp_ms.cmp(&right.timestamp_ms).then(left.offset.cmp(&right.offset)),
-                    "key" => left.key_preview.cmp(&right.key_preview),
-                    "value" => left.value_preview.cmp(&right.value_preview),
+                    "key" => left.key_preview().cmp(right.key_preview()),
+                    "value" => left.value_preview().cmp(right.value_preview()),
                     _ => std::cmp::Ordering::Equal,
                 }
             });
@@ -138,14 +138,14 @@ impl MessageTableDelegate {
         best.map(|(row, _)| row)
     }
 
-    fn text_for(&self, record: &MessageRecord, col_ix: usize) -> String {
+    fn text_for(&self, record: &MessageRecord, col_ix: usize) -> SharedString {
         match self.columns.get(col_ix).map(|c| c.key.as_ref()) {
-            Some("partition") => record.partition.to_string(),
-            Some("offset") => record.offset.to_string(),
-            Some("timestamp") => format_timestamp(record.timestamp_ms),
-            Some("key") => record.key_preview.clone(),
-            Some("value") => record.value_preview.clone(),
-            _ => String::new(),
+            Some("partition") => record.partition.to_string().into(),
+            Some("offset") => record.offset.to_string().into(),
+            Some("timestamp") => format_timestamp(record.timestamp_ms).into(),
+            Some("key") => record.key_preview().clone().into(),
+            Some("value") => record.value_preview().clone().into(),
+            _ => SharedString::default(),
         }
     }
 }
@@ -211,16 +211,15 @@ impl TableDelegate for MessageTableDelegate {
         let text = |bytes: Option<&[u8]>| {
             bytes.map_or_else(String::new, |b| String::from_utf8_lossy(b).into_owned())
         };
-        let value = text(record.value.as_deref());
-        let key = text(record.key.as_deref());
+        let value = text(record.value());
+        let key = text(record.key());
         let row = (0..self.columns.len())
             .map(|col_ix| self.cell_text(row_ix, col_ix, cx))
             .collect::<Vec<_>>()
             .join("\t");
         let headers = record
-            .headers
-            .iter()
-            .map(|(name, value)| format!("{name}: {}", text(value.as_deref())))
+            .headers()
+            .map(|(name, value)| format!("{name}: {}", text(value)))
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -255,7 +254,7 @@ impl TableDelegate for MessageTableDelegate {
 
     fn cell_text(&self, row_ix: usize, col_ix: usize, _cx: &App) -> String {
         self.record_at_row(row_ix)
-            .map(|record| self.text_for(record, col_ix))
+            .map(|record| self.text_for(record, col_ix).to_string())
             .unwrap_or_default()
     }
 
@@ -957,14 +956,16 @@ pub(crate) mod selection_tests {
     pub(crate) fn sample_records() -> Vec<MessageRecord> {
         (0..20)
             .map(|ix| {
+                let key = format!("key-{ix:04}");
+                let value = format!("value-{ix:04}");
                 MessageRecord::new(
                     Arc::from("orders"),
                     0,
                     1000 + ix,
                     Some(1_700_000_000_000 + ix),
-                    Some(format!("key-{ix:04}").into_bytes()),
-                    Some(format!("value-{ix:04}").into_bytes()),
-                    Vec::new(),
+                    Some(key.as_bytes()),
+                    Some(value.as_bytes()),
+                    &[],
                 )
             })
             .collect()

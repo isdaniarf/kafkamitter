@@ -1,10 +1,20 @@
 use std::collections::VecDeque;
-use std::sync::Arc;
+use std::ops::Range;
+use std::sync::{Arc, OnceLock};
 
 use crate::model::search;
 
 pub const KEY_PREVIEW_CHARS: usize = 120;
 pub const VALUE_PREVIEW_CHARS: usize = 200;
+
+static NULL_PREVIEW: OnceLock<Arc<str>> = OnceLock::new();
+static EMPTY_PREVIEW: OnceLock<Arc<str>> = OnceLock::new();
+
+#[derive(Debug, Clone)]
+struct HeaderSpan {
+    name: Range<u32>,
+    value: Option<Range<u32>>,
+}
 
 #[derive(Debug, Clone)]
 pub struct MessageRecord {
@@ -12,11 +22,12 @@ pub struct MessageRecord {
     pub partition: i32,
     pub offset: i64,
     pub timestamp_ms: Option<i64>,
-    pub key: Option<Vec<u8>>,
-    pub value: Option<Vec<u8>>,
-    pub headers: Vec<(String, Option<Vec<u8>>)>,
-    pub key_preview: String,
-    pub value_preview: String,
+    bytes: Box<[u8]>,
+    key: Option<Range<u32>>,
+    value: Option<Range<u32>>,
+    headers: Box<[HeaderSpan]>,
+    key_preview: Arc<str>,
+    value_preview: Arc<str>,
 }
 
 impl MessageRecord {
@@ -25,58 +36,110 @@ impl MessageRecord {
         partition: i32,
         offset: i64,
         timestamp_ms: Option<i64>,
-        key: Option<Vec<u8>>,
-        value: Option<Vec<u8>>,
-        headers: Vec<(String, Option<Vec<u8>>)>,
+        key: Option<&[u8]>,
+        value: Option<&[u8]>,
+        headers: &[(&str, Option<&[u8]>)],
     ) -> Self {
-        let key_preview = preview(key.as_deref(), KEY_PREVIEW_CHARS);
-        let value_preview = preview(value.as_deref(), VALUE_PREVIEW_CHARS);
+        let total = key.map_or(0, <[u8]>::len)
+            + value.map_or(0, <[u8]>::len)
+            + headers
+                .iter()
+                .map(|(name, value)| name.len() + value.map_or(0, <[u8]>::len))
+                .sum::<usize>();
+        let mut bytes = Vec::with_capacity(total);
+        let key_span = key.map(|key| append(&mut bytes, key));
+        let value_span = value.map(|value| append(&mut bytes, value));
+        let header_spans = headers
+            .iter()
+            .map(|(name, value)| HeaderSpan {
+                name: append(&mut bytes, name.as_bytes()),
+                value: value.map(|value| append(&mut bytes, value)),
+            })
+            .collect();
         Self {
             topic,
             partition,
             offset,
             timestamp_ms,
-            key,
-            value,
-            headers,
-            key_preview,
-            value_preview,
+            bytes: bytes.into_boxed_slice(),
+            key: key_span,
+            value: value_span,
+            headers: header_spans,
+            key_preview: preview(key, KEY_PREVIEW_CHARS),
+            value_preview: preview(value, VALUE_PREVIEW_CHARS),
         }
     }
 
+    pub fn key(&self) -> Option<&[u8]> {
+        self.key.as_ref().map(|span| self.slice(span))
+    }
+
+    pub fn value(&self) -> Option<&[u8]> {
+        self.value.as_ref().map(|span| self.slice(span))
+    }
+
+    pub fn headers(&self) -> impl Iterator<Item = (&str, Option<&[u8]>)> {
+        self.headers.iter().map(|header| {
+            let name = std::str::from_utf8(self.slice(&header.name)).unwrap_or_default();
+            (name, header.value.as_ref().map(|span| self.slice(span)))
+        })
+    }
+
+    pub fn has_headers(&self) -> bool {
+        !self.headers.is_empty()
+    }
+
+    pub fn key_preview(&self) -> &Arc<str> {
+        &self.key_preview
+    }
+
+    pub fn value_preview(&self) -> &Arc<str> {
+        &self.value_preview
+    }
+
+    /// The heap bytes of one stored record, including its own struct and the
+    /// slots that the store keeps for it.
     pub fn byte_len(&self) -> usize {
-        let key = self.key.as_ref().map_or(0, Vec::len);
-        let value = self.value.as_ref().map_or(0, Vec::len);
-        let headers: usize = self
-            .headers
-            .iter()
-            .map(|(k, v)| k.len() + v.as_ref().map_or(0, Vec::len))
-            .sum();
-        key + value + headers + self.key_preview.len() + self.value_preview.len() + 64
+        self.bytes.len()
+            + self.headers.len() * std::mem::size_of::<HeaderSpan>()
+            + self.key_preview.len()
+            + self.value_preview.len()
+            + std::mem::size_of::<Self>()
+            + 32
+    }
+
+    fn slice(&self, span: &Range<u32>) -> &[u8] {
+        &self.bytes[span.start as usize..span.end as usize]
     }
 }
 
-pub fn preview(bytes: Option<&[u8]>, max_chars: usize) -> String {
+fn append(bytes: &mut Vec<u8>, chunk: &[u8]) -> Range<u32> {
+    let start = bytes.len() as u32;
+    bytes.extend_from_slice(chunk);
+    start..bytes.len() as u32
+}
+
+pub fn preview(bytes: Option<&[u8]>, max_chars: usize) -> Arc<str> {
     let Some(bytes) = bytes else {
-        return String::from("<null>");
+        return NULL_PREVIEW.get_or_init(|| Arc::from("<null>")).clone();
     };
     if bytes.is_empty() {
-        return String::from("<empty>");
+        return EMPTY_PREVIEW.get_or_init(|| Arc::from("<empty>")).clone();
     }
     let head = &bytes[..bytes.len().min(max_chars * 4)];
     let text = String::from_utf8_lossy(head);
-    let mut out = String::with_capacity(max_chars + 1);
+    let mut out = String::with_capacity(head.len() + 3);
     for (count, ch) in text.chars().enumerate() {
         if count == max_chars {
             out.push('…');
-            return out;
+            return Arc::from(out);
         }
         out.push(if ch == '\n' || ch == '\r' || ch == '\t' { ' ' } else { ch });
     }
     if bytes.len() > head.len() {
         out.push('…');
     }
-    out
+    Arc::from(out)
 }
 
 pub struct MessageStore {
@@ -212,14 +275,18 @@ mod tests {
     use super::*;
 
     fn record(offset: i64, value_len: usize) -> MessageRecord {
+        record_with_value(offset, &vec![b'x'; value_len])
+    }
+
+    fn record_with_value(offset: i64, value: &[u8]) -> MessageRecord {
         MessageRecord::new(
             Arc::from("t"),
             0,
             offset,
             Some(1_700_000_000_000),
-            Some(b"k".to_vec()),
-            Some(vec![b'x'; value_len]),
-            vec![],
+            Some(b"k"),
+            Some(value),
+            &[],
         )
     }
 
@@ -304,9 +371,7 @@ mod tests {
     #[test]
     fn matched_rows_are_newest_first() {
         let mut store = MessageStore::new(10, 1 << 20);
-        let mut odd = record(7, 1);
-        odd.value = Some(b"needle".to_vec());
-        store.push_batch([record(1, 1), odd, record(9, 1)]);
+        store.push_batch([record(1, 1), record_with_value(7, b"needle"), record(9, 1)]);
         store.set_query(Some(b"needle".to_vec()));
         let rows = store.matched_rows();
         assert_eq!(rows.len(), 1);
@@ -314,12 +379,38 @@ mod tests {
     }
 
     #[test]
+    fn a_record_keeps_its_parts_in_one_buffer() {
+        let record = MessageRecord::new(
+            Arc::from("t"),
+            2,
+            5,
+            None,
+            Some(b"key"),
+            Some(b"value"),
+            &[("trace", Some(b"abc")), ("empty", None)],
+        );
+        assert_eq!(record.key(), Some(b"key".as_slice()));
+        assert_eq!(record.value(), Some(b"value".as_slice()));
+        assert!(record.has_headers());
+        let headers: Vec<(&str, Option<&[u8]>)> = record.headers().collect();
+        assert_eq!(headers, vec![("trace", Some(b"abc".as_slice())), ("empty", None)]);
+        assert_eq!(record.key_preview().as_ref(), "key");
+        assert_eq!(record.value_preview().as_ref(), "value");
+
+        let tombstone = MessageRecord::new(Arc::from("t"), 0, 0, None, None, None, &[]);
+        assert_eq!(tombstone.key(), None);
+        assert_eq!(tombstone.value(), None);
+        assert!(!tombstone.has_headers());
+        assert_eq!(tombstone.value_preview().as_ref(), "<null>");
+    }
+
+    #[test]
     fn previews_flatten_whitespace_and_truncate() {
-        assert_eq!(preview(None, 10), "<null>");
-        assert_eq!(preview(Some(b""), 10), "<empty>");
-        assert_eq!(preview(Some(b"a\nb\tc"), 10), "a b c");
-        assert_eq!(preview(Some(b"0123456789abc"), 10), "0123456789…");
-        assert_eq!(preview(Some("héllo".as_bytes()), 3), "hél…");
-        assert_eq!(preview(Some(b"\xff\xfeok"), 10), "\u{fffd}\u{fffd}ok");
+        assert_eq!(preview(None, 10).as_ref(), "<null>");
+        assert_eq!(preview(Some(b""), 10).as_ref(), "<empty>");
+        assert_eq!(preview(Some(b"a\nb\tc"), 10).as_ref(), "a b c");
+        assert_eq!(preview(Some(b"0123456789abc"), 10).as_ref(), "0123456789…");
+        assert_eq!(preview(Some("héllo".as_bytes()), 3).as_ref(), "hél…");
+        assert_eq!(preview(Some(b"\xff\xfeok"), 10).as_ref(), "\u{fffd}\u{fffd}ok");
     }
 }

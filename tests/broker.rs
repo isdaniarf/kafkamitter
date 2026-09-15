@@ -150,10 +150,11 @@ fn end_to_end_against_a_real_broker() {
     assert_eq!(newest_offsets, vec![1, 2], "newest 2 must return the last two offsets");
     assert_eq!(eof.len(), 2, "expected EOF on both partitions");
     let first = records.iter().find(|r| r.offset == 0).expect("offset 0");
-    assert_eq!(first.key.as_deref(), Some(b"k0".as_slice()));
-    assert_eq!(first.value.as_deref(), Some(br#"{"i":0}"#.as_slice()));
-    assert_eq!(first.headers, vec![("source".to_string(), Some(b"it".to_vec()))]);
-    assert_eq!(first.value_preview, r#"{"i":0}"#);
+    assert_eq!(first.key(), Some(b"k0".as_slice()));
+    assert_eq!(first.value(), Some(br#"{"i":0}"#.as_slice()));
+    let headers: Vec<(&str, Option<&[u8]>)> = first.headers().collect();
+    assert_eq!(headers, vec![("source", Some(b"it".as_slice()))]);
+    assert_eq!(first.value_preview().as_ref(), r#"{"i":0}"#);
 
     let group = unique("kafkamitter-it-group");
     let mut member_config = base.clone();

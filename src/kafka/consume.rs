@@ -211,22 +211,17 @@ fn build_assignment(
 }
 
 fn record_from(message: &BorrowedMessage<'_>, topic: &Arc<str>) -> MessageRecord {
-    let headers = message
+    let headers: Vec<(&str, Option<&[u8]>)> = message
         .headers()
-        .map(|headers| {
-            headers
-                .iter()
-                .map(|header| (header.key.to_string(), header.value.map(|v| v.to_vec())))
-                .collect()
-        })
+        .map(|headers| headers.iter().map(|header| (header.key, header.value)).collect())
         .unwrap_or_default();
     MessageRecord::new(
         topic.clone(),
         message.partition(),
         message.offset(),
         message.timestamp().to_millis(),
-        message.key().map(|k| k.to_vec()),
-        message.payload().map(|v| v.to_vec()),
-        headers,
+        message.key(),
+        message.payload(),
+        &headers,
     )
 }
