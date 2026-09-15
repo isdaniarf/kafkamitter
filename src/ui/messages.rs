@@ -33,8 +33,35 @@ pub struct MessageTableDelegate {
     columns: Vec<Column>,
     sort: Option<(SharedString, ColumnSort)>,
     /// Display row to store row, after the search term and the sort apply.
-    rows: Vec<usize>,
+    rows: RowMap,
     rows_dirty: bool,
+    pending: usize,
+}
+
+enum RowMap {
+    Identity,
+    Mapped(Vec<usize>),
+}
+
+fn merge_sorted(
+    left: Vec<usize>,
+    right: Vec<usize>,
+    mut compare: impl FnMut(usize, usize) -> std::cmp::Ordering,
+) -> Vec<usize> {
+    let mut out = Vec::with_capacity(left.len() + right.len());
+    let (mut left, mut right) = (left.into_iter().peekable(), right.into_iter().peekable());
+    while let (Some(&a), Some(&b)) = (left.peek(), right.peek()) {
+        if compare(a, b) == std::cmp::Ordering::Greater {
+            out.push(b);
+            right.next();
+        } else {
+            out.push(a);
+            left.next();
+        }
+    }
+    out.extend(left);
+    out.extend(right);
+    out
 }
 
 impl MessageTableDelegate {
@@ -49,20 +76,21 @@ impl MessageTableDelegate {
                 Column::new("value", "Value").width(px(900.)).sortable(),
             ],
             sort: None,
-            rows: Vec::new(),
+            rows: RowMap::Identity,
             rows_dirty: true,
+            pending: 0,
         }
     }
 
     pub fn push_batch(&mut self, batch: Vec<MessageRecord>) {
-        self.store.push_batch(batch);
-        self.rows_dirty = true;
+        self.pending += self.store.push_batch(batch);
     }
 
     pub fn clear(&mut self) {
         self.store.clear();
-        self.rows.clear();
+        self.rows = RowMap::Identity;
         self.rows_dirty = true;
+        self.pending = 0;
     }
 
     pub fn set_query(&mut self, query: &str) {
@@ -76,47 +104,98 @@ impl MessageTableDelegate {
 
     /// Rebuilds the visible rows. It runs at most once for each frame.
     pub fn ensure_rows(&mut self) {
-        if !self.rows_dirty {
+        if self.rows_dirty {
+            self.rows_dirty = false;
+            self.pending = 0;
+            self.rows = self.build_rows();
             return;
         }
-        self.rows_dirty = false;
-        let mut rows = self.store.matched_rows();
-        if let Some((key, direction)) = self.sort.clone() {
-            let store = &self.store;
-            rows.sort_by(|&a, &b| {
-                let (Some(left), Some(right)) = (store.get(a), store.get(b)) else {
-                    return std::cmp::Ordering::Equal;
-                };
-                match key.as_ref() {
-                    "partition" => left.partition.cmp(&right.partition).then(left.offset.cmp(&right.offset)),
-                    "offset" => left.offset.cmp(&right.offset).then(left.partition.cmp(&right.partition)),
-                    "timestamp" => left.timestamp_ms.cmp(&right.timestamp_ms).then(left.offset.cmp(&right.offset)),
-                    "key" => left.key_preview().cmp(right.key_preview()),
-                    "value" => left.value_preview().cmp(right.value_preview()),
-                    _ => std::cmp::Ordering::Equal,
-                }
-            });
-            if direction == ColumnSort::Descending {
-                rows.reverse();
-            }
+        let added = std::mem::take(&mut self.pending);
+        if added > 0 {
+            self.merge_rows(added);
         }
-        self.rows = rows;
+    }
+
+    fn build_rows(&self) -> RowMap {
+        if self.sort.is_none() && !self.store.has_query() {
+            return RowMap::Identity;
+        }
+        let mut rows = self.store.matched_rows();
+        if self.sort.is_some() {
+            rows.sort_by(|&a, &b| self.compare(a, b));
+        }
+        RowMap::Mapped(rows)
+    }
+
+    fn merge_rows(&mut self, added: usize) {
+        let RowMap::Mapped(old) = std::mem::replace(&mut self.rows, RowMap::Identity) else {
+            return;
+        };
+        let len = self.store.len();
+        let mut fresh: Vec<usize> = (0..added.min(len)).filter(|&row| self.store.hit(row)).collect();
+        let mut kept: Vec<usize> = old
+            .into_iter()
+            .map(|row| row + added)
+            .filter(|&row| row < len)
+            .collect();
+        let merged = if self.sort.is_some() {
+            fresh.sort_by(|&a, &b| self.compare(a, b));
+            merge_sorted(fresh, kept, |a, b| self.compare(a, b))
+        } else {
+            fresh.append(&mut kept);
+            fresh
+        };
+        self.rows = RowMap::Mapped(merged);
+    }
+
+    fn compare(&self, a: usize, b: usize) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        let Some((key, direction)) = &self.sort else {
+            return a.cmp(&b);
+        };
+        let (Some(left), Some(right)) = (self.store.get(a), self.store.get(b)) else {
+            return Ordering::Equal;
+        };
+        let order = match key.as_ref() {
+            "partition" => left.partition.cmp(&right.partition).then(left.offset.cmp(&right.offset)),
+            "offset" => left.offset.cmp(&right.offset).then(left.partition.cmp(&right.partition)),
+            "timestamp" => left.timestamp_ms.cmp(&right.timestamp_ms).then(left.offset.cmp(&right.offset)),
+            "key" => left.key_preview().cmp(right.key_preview()),
+            "value" => left.value_preview().cmp(right.value_preview()),
+            _ => Ordering::Equal,
+        }
+        .then(a.cmp(&b));
+        if *direction == ColumnSort::Descending {
+            order.reverse()
+        } else {
+            order
+        }
+    }
+
+    fn store_row(&self, row: usize) -> Option<usize> {
+        match &self.rows {
+            RowMap::Identity => (row < self.store.len()).then_some(row),
+            RowMap::Mapped(rows) => rows.get(row).copied(),
+        }
     }
 
     /// The number of rows the table shows, after the search term applies.
     pub fn visible_rows(&self) -> usize {
-        self.rows.len()
+        match &self.rows {
+            RowMap::Identity => self.store.len(),
+            RowMap::Mapped(rows) => rows.len(),
+        }
     }
 
     pub fn record_at_row(&self, row: usize) -> Option<&Arc<MessageRecord>> {
-        self.store.get(*self.rows.get(row)?)
+        self.store.get(self.store_row(row)?)
     }
 
     /// The visible row that holds the newest or the oldest message.
     pub fn extreme_row(&self, newest: bool) -> Option<usize> {
         let mut best: Option<(usize, (Option<i64>, i64))> = None;
-        for (row, &store_row) in self.rows.iter().enumerate() {
-            let Some(record) = self.store.get(store_row) else {
+        for row in 0..self.visible_rows() {
+            let Some(record) = self.store_row(row).and_then(|store_row| self.store.get(store_row)) else {
                 continue;
             };
             let key = (record.timestamp_ms, record.offset);
@@ -1120,5 +1199,89 @@ pub(crate) mod selection_tests {
         });
         let found = drag_scan(cx);
         assert!(!found.is_empty(), "a message table cell must report a selection; scanned rows produced nothing");
+    }
+}
+
+#[cfg(test)]
+mod row_map_tests {
+    use std::prelude::v1::test;
+
+    use super::*;
+
+    fn record(offset: i64, value: &str) -> MessageRecord {
+        MessageRecord::new(
+            Arc::from("t"),
+            (offset % 2) as i32,
+            offset,
+            Some(1_700_000_000_000 + offset),
+            None,
+            Some(value.as_bytes()),
+            &[],
+        )
+    }
+
+    fn offsets(delegate: &mut MessageTableDelegate) -> Vec<i64> {
+        delegate.ensure_rows();
+        (0..delegate.visible_rows())
+            .filter_map(|row| delegate.record_at_row(row).map(|r| r.offset))
+            .collect()
+    }
+
+    #[test]
+    fn the_identity_map_shows_the_newest_message_first() {
+        let mut delegate = MessageTableDelegate::new();
+        delegate.push_batch(vec![record(1, "a"), record(2, "b")]);
+        assert_eq!(offsets(&mut delegate), vec![2, 1]);
+        delegate.push_batch(vec![record(3, "c")]);
+        assert_eq!(offsets(&mut delegate), vec![3, 2, 1]);
+        assert!(matches!(delegate.rows, RowMap::Identity));
+    }
+
+    #[test]
+    fn new_hits_join_the_front_and_evicted_rows_leave() {
+        let mut delegate = MessageTableDelegate::new();
+        delegate.store.set_limits(4, usize::MAX);
+        delegate.set_query("x");
+        delegate.push_batch(vec![record(1, "x"), record(2, "y"), record(3, "x")]);
+        assert_eq!(offsets(&mut delegate), vec![3, 1]);
+        delegate.push_batch(vec![record(4, "x"), record(5, "y"), record(6, "x")]);
+        assert_eq!(offsets(&mut delegate), vec![6, 4, 3]);
+        assert!(matches!(delegate.rows, RowMap::Mapped(_)));
+    }
+
+    #[test]
+    fn a_merged_sort_matches_a_full_rebuild() {
+        let mut incremental = MessageTableDelegate::new();
+        let mut full = MessageTableDelegate::new();
+        for delegate in [&mut incremental, &mut full] {
+            delegate.store.set_limits(50, usize::MAX);
+            delegate.set_query("1");
+        }
+        let sorts = [
+            ("value", ColumnSort::Ascending),
+            ("offset", ColumnSort::Descending),
+            ("partition", ColumnSort::Ascending),
+            ("timestamp", ColumnSort::Descending),
+        ];
+        for (round, (key, direction)) in sorts.iter().enumerate() {
+            for delegate in [&mut incremental, &mut full] {
+                delegate.sort = Some((SharedString::from(*key), direction.clone()));
+                delegate.rows_dirty = true;
+            }
+            for batch in 0..8 {
+                let records: Vec<MessageRecord> = (0..13)
+                    .map(|i| {
+                        let n = (round * 8 + batch) * 13 + i;
+                        record(n as i64, &format!("v{}", (n * 7919) % 97))
+                    })
+                    .collect();
+                incremental.push_batch(records.clone());
+                full.push_batch(records);
+                full.rows_dirty = true;
+                let expected = offsets(&mut full);
+                assert!(!expected.is_empty());
+                assert_eq!(offsets(&mut incremental), expected, "sort {key} batch {batch}");
+            }
+        }
     }
 }

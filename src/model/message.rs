@@ -104,8 +104,6 @@ impl MessageRecord {
             .get_or_init(|| Arc::from(format_timestamp(self.timestamp_ms)))
     }
 
-    /// The heap bytes of one stored record, including its own struct and the
-    /// slots that the store keeps for it.
     pub fn byte_len(&self) -> usize {
         self.bytes.len()
             + self.headers.len() * std::mem::size_of::<HeaderSpan>()
@@ -185,7 +183,8 @@ impl MessageStore {
         }
     }
 
-    pub fn push_batch(&mut self, batch: impl IntoIterator<Item = MessageRecord>) {
+    pub fn push_batch(&mut self, batch: impl IntoIterator<Item = MessageRecord>) -> usize {
+        let mut added = 0;
         for record in batch {
             self.total_bytes += record.byte_len();
             self.total_received += 1;
@@ -193,8 +192,15 @@ impl MessageStore {
             self.matched += usize::from(hit);
             self.hits.push_back(hit);
             self.items.push_back(Arc::new(record));
+            added += 1;
         }
         self.evict();
+        added
+    }
+
+    pub fn hit(&self, row: usize) -> bool {
+        let len = self.hits.len();
+        row < len && self.hits[len - 1 - row]
     }
 
     /// Sets the search term. `None` shows every message.
