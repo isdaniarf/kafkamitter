@@ -1,6 +1,7 @@
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::dialog::{DialogClose, DialogFooter};
+use gpui_component::link::Link;
 use gpui_component::{ActiveTheme, StyledExt, WindowExt, h_flex, v_flex};
 
 use crate::app::KafkamitterApp;
@@ -51,13 +52,12 @@ pub fn open_about_dialog(window: &mut Window, cx: &mut Context<KafkamitterApp>) 
             .child(row("librdkafka", librdkafka_version()))
             .child(div().h_2())
             .child(
-                div()
+                Link::new("about-homepage")
+                    .href(HOMEPAGE)
                     .text_xs()
-                    .text_color(cx.theme().muted_foreground)
                     .child(HOMEPAGE),
             );
         dialog
-            .title("About Kafkamitter")
             .w(px(420.))
             .child(body)
             .footer(
