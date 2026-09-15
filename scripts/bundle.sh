@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="Kafkamitter"
 BUNDLE_ID="dev.fithrantyo.kafkamitter"
 VERSION="$(grep -m1 '^version' "$ROOT/Cargo.toml" | sed -E 's/.*"([^"]+)".*/\1/')"
-DIST="$ROOT/dist"
+DIST="$ROOT/dist.noindex"
 APP="$DIST/$APP_NAME.app"
 
 if [ "${KAFKAMITTER_PRECOMPILED_SHADERS:-0}" = "1" ]; then

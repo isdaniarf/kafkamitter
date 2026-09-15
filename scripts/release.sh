@@ -4,7 +4,7 @@ set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="$(grep -m1 '^version' "$ROOT/Cargo.toml" | sed -E 's/.*"([^"]+)".*/\1/')"
 ARCH="$(uname -m)"
-DIST="$ROOT/dist"
+DIST="$ROOT/dist.noindex"
 APP="$DIST/Kafkamitter.app"
 ZIP="$DIST/Kafkamitter-$VERSION-$ARCH.zip"
 

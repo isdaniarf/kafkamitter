@@ -180,13 +180,13 @@ The default build compiles the Metal shaders at runtime, so the Xcode Metal Tool
 cargo run --release
 ```
 
-Create an app bundle in `dist/Kafkamitter.app`:
+Create an app bundle in `dist.noindex/Kafkamitter.app`:
 
 ```sh
 scripts/bundle.sh
 ```
 
-The script signs the bundle with an ad-hoc signature. It does not notarize the app.
+The script signs the bundle with an ad-hoc signature. It does not notarize the app. The folder name ends in `.noindex`, so macOS keeps the development build out of Spotlight and Launchpad. Without that name, the build shows a second Kafkamitter icon next to the installed app, because both carry the same bundle identifier.
 
 Rebuild the app icon after you change `assets/kafkamitter-icon.svg`:
 
@@ -202,7 +202,7 @@ Package a release archive for the Homebrew tap:
 scripts/release.sh
 ```
 
-It builds the bundle, writes `dist/Kafkamitter-<version>-<arch>.zip`, and prints the SHA-256 for the cask. Upload the archive to a release in `isdaniarf/homebrew-tap` and update `Casks/kafkamitter.rb` with the new version and hash.
+It builds the bundle, writes `dist.noindex/Kafkamitter-<version>-<arch>.zip`, and prints the SHA-256 for the cask. Upload the archive to a release in `isdaniarf/homebrew-tap` and update `Casks/kafkamitter.rb` with the new version and hash.
 
 ## Local broker for development
 
