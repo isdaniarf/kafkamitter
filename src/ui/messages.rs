@@ -1415,7 +1415,7 @@ mod row_map_tests {
         ];
         for (round, (key, direction)) in sorts.iter().enumerate() {
             for delegate in [&mut incremental, &mut full] {
-                delegate.sort = Some((SharedString::from(*key), direction.clone()));
+                delegate.sort = Some((SharedString::from(*key), *direction));
                 delegate.rows_dirty = true;
             }
             for batch in 0..8 {
@@ -1445,7 +1445,7 @@ mod search_tests {
     #[gpui::test]
     fn the_search_applies_after_the_debounce(cx: &mut TestAppContext) {
         cx.update(gpui_component::init);
-        let (view, cx) = cx.add_window_view(|window, cx| MessagesView::new(window, cx));
+        let (view, cx) = cx.add_window_view(MessagesView::new);
         cx.update(|window, cx| {
             view.update(cx, |view, cx| {
                 view.search.update(cx, |input, cx| input.set_value("abc", window, cx));

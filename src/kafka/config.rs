@@ -53,8 +53,8 @@ pub fn viewer_consumer_config(base: &ClientConfig) -> ClientConfig {
         .set("enable.auto.offset.store", "false")
         .set("enable.partition.eof", "true")
         .set("auto.offset.reset", "earliest")
-        .set("queued.max.messages.kbytes", "4096")
-        .set("queued.min.messages", "5000")
+        .set("queued.max.messages.kbytes", "16384")
+        .set("queued.min.messages", "100000")
         .set("fetch.wait.max.ms", "100");
     cfg
 }
@@ -147,8 +147,8 @@ mod tests {
         assert_eq!(cfg.get("enable.auto.commit"), Some("false"));
         assert_eq!(cfg.get("enable.auto.offset.store"), Some("false"));
         assert_eq!(cfg.get("enable.partition.eof"), Some("true"));
-        assert_eq!(cfg.get("queued.max.messages.kbytes"), Some("4096"));
-        assert_eq!(cfg.get("queued.min.messages"), Some("5000"));
+        assert_eq!(cfg.get("queued.max.messages.kbytes"), Some("16384"));
+        assert_eq!(cfg.get("queued.min.messages"), Some("100000"));
         assert_eq!(cfg.get("security.protocol"), Some("plaintext"));
     }
 
