@@ -27,6 +27,7 @@ const MAX_MESSAGES: usize = 10_000;
 const MAX_BYTES: usize = 256 * 1024 * 1024;
 const NEWEST_PER_PARTITION: i64 = 200;
 const START_MODES: [&str; 5] = ["Newest 200", "Latest", "Beginning", "Offset", "Timestamp"];
+const SEARCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(100);
 
 pub struct MessageTableDelegate {
     pub store: MessageStore,
@@ -396,6 +397,7 @@ pub struct MessagesView {
     start_value: Entity<InputState>,
     partition: Entity<SelectState<Vec<SharedString>>>,
     search: Entity<InputState>,
+    search_debounce: Option<Task<()>>,
     detail: Entity<MessageDetailView>,
     split: Entity<ResizableState>,
     scroll_guard: Rc<ScrollGuard>,
@@ -453,6 +455,7 @@ impl MessagesView {
             start_value,
             partition,
             search,
+            search_debounce: None,
             detail,
             split,
             scroll_guard: Rc::default(),
@@ -588,15 +591,22 @@ impl MessagesView {
 
     fn on_search_event(
         &mut self,
-        search: &Entity<InputState>,
+        _search: &Entity<InputState>,
         event: &InputEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if !matches!(event, InputEvent::Change) {
             return;
         }
-        let query = search.read(cx).value().to_string();
+        self.search_debounce = Some(cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(SEARCH_DEBOUNCE).await;
+            let _ = this.update_in(cx, |view, _, cx| view.apply_search(cx));
+        }));
+    }
+
+    fn apply_search(&mut self, cx: &mut Context<Self>) {
+        let query = self.search.read(cx).value().to_string();
         self.table.update(cx, |table, cx| {
             table.delegate_mut().set_query(&query);
             table.clear_selection(cx);
@@ -1283,5 +1293,34 @@ mod row_map_tests {
                 assert_eq!(offsets(&mut incremental), expected, "sort {key} batch {batch}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod search_tests {
+    use std::prelude::v1::test;
+
+    use super::*;
+
+    #[gpui::test]
+    fn the_search_applies_after_the_debounce(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let (view, cx) = cx.add_window_view(|window, cx| MessagesView::new(window, cx));
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                view.search.update(cx, |input, cx| input.set_value("abc", window, cx));
+                let search = view.search.clone();
+                view.on_search_event(&search, &InputEvent::Change, window, cx);
+                view.on_search_event(&search, &InputEvent::Change, window, cx);
+            });
+        });
+        cx.run_until_parked();
+        let has_query = |cx: &mut gpui::VisualTestContext| {
+            cx.read(|cx| view.read(cx).table.read(cx).delegate().store.has_query())
+        };
+        assert!(!has_query(cx), "the scan must wait for the debounce");
+        cx.executor().advance_clock(SEARCH_DEBOUNCE);
+        cx.run_until_parked();
+        assert!(has_query(cx), "the scan must run once the debounce ends");
     }
 }
